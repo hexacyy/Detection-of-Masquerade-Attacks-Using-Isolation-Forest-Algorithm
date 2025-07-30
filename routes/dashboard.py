@@ -32,10 +32,32 @@ def clean_dataframe_for_json(df):
 
 
 
+# Replace your generate_summary_internal function in routes/dashboard.py with this:
+
+def clean_dataframe_for_json(df):
+    """Clean DataFrame to make it JSON serializable"""
+    if df is None or df.empty:
+        return []
+    
+    df_clean = df.copy()
+    
+    # Handle datetime columns and NaT values
+    for col in df_clean.columns:
+        if df_clean[col].dtype == 'datetime64[ns]':
+            # Convert datetime to string, handling NaT values
+            df_clean[col] = df_clean[col].dt.strftime('%Y-%m-%d %H:%M:%S').where(
+                pd.notna(df_clean[col]), None
+            )
+    
+    # Replace NaN with None (which becomes null in JSON)
+    df_clean = df_clean.where(pd.notna(df_clean), None)
+    
+    # Convert to records (list of dictionaries)
+    return df_clean.to_dict(orient='records')
+
 def generate_summary_internal(selected_month=None):
     """
-    Enhanced summary generation that properly handles monthly data
-    and preserves historical information for Static Report
+    Enhanced summary generation with df_tail for dashboard template
     """
     try:
         db_path = get_monthly_db_path()
@@ -49,16 +71,20 @@ def generate_summary_internal(selected_month=None):
                 'last_updated': 'No data',
                 'available_months': [],
                 'timestamps': [],
-                'anomaly_flags': []
+                'anomaly_flags': [],
+                'df_tail': []  # Add empty df_tail
             }
 
         with sqlite3.connect(db_path) as conn:
             # First, get all available months for the dropdown
-            available_months_df = pd.read_sql_query(
-                "SELECT DISTINCT log_month FROM prediction_logs WHERE log_month IS NOT NULL ORDER BY log_month DESC", 
-                conn
-            )
-            available_months = available_months_df['log_month'].tolist()
+            try:
+                available_months_df = pd.read_sql_query(
+                    "SELECT DISTINCT log_month FROM prediction_logs WHERE log_month IS NOT NULL ORDER BY log_month DESC", 
+                    conn
+                )
+                available_months = available_months_df['log_month'].tolist()
+            except:
+                available_months = []
 
             # Build the main query based on selected month
             if selected_month:
@@ -83,6 +109,7 @@ def generate_summary_internal(selected_month=None):
                 'available_months': available_months,
                 'timestamps': [],
                 'anomaly_flags': [],
+                'df_tail': [],  # Add empty df_tail
                 'selected_month_summary': f"No data found for {selected_month}" if selected_month else "No data available"
             }
 
@@ -120,6 +147,11 @@ def generate_summary_internal(selected_month=None):
             
             anomaly_flags = recent_df['anomaly'].tolist() if 'anomaly' in recent_df.columns else [0] * len(recent_df)
 
+        # CRITICAL: Add df_tail for dashboard template
+        # Get recent records for the table display (limit to 100 for performance)
+        df_tail_records = df.head(100) if not df.empty else pd.DataFrame()
+        df_tail_clean = clean_dataframe_for_json(df_tail_records)
+
         # Add month-specific summary
         month_summary = f"Showing data for {selected_month}" if selected_month else f"Showing all {len(available_months)} months"
         if selected_month:
@@ -134,12 +166,13 @@ def generate_summary_internal(selected_month=None):
             'available_months': available_months,
             'timestamps': timestamps,
             'anomaly_flags': anomaly_flags,
+            'df_tail': df_tail_clean,  # CRITICAL: Add this field for dashboard template
             'selected_month_summary': month_summary,
             'data_source': f"Database: {os.path.basename(db_path)}",
             'query_month': selected_month or 'All months'
         }
 
-        print(f"[DEBUG] Summary generated: {total} total, {anomalies} anomalies, {len(available_months)} months available")
+        print(f"[DEBUG] Summary generated: {total} total, {anomalies} anomalies, {len(df_tail_clean)} records in df_tail")
         return summary
 
     except Exception as e:
@@ -156,20 +189,26 @@ def generate_summary_internal(selected_month=None):
             'available_months': [],
             'timestamps': [],
             'anomaly_flags': [],
+            'df_tail': [],  # CRITICAL: Add this field even for errors
             'error': str(e)
         }
+
+# Replace your dashboard route in routes/dashboard.py with this:
 
 @dashboard_bp.route('/dashboard')
 @login_required()
 def dashboard():
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
+    
+    # Generate base summary
     summary = generate_summary_internal()
     
     # Handle date filtering
     if start_date or end_date:
         try:
-            with sqlite3.connect(get_monthly_db_path()) as conn:
+            db_path = get_monthly_db_path()
+            with sqlite3.connect(db_path) as conn:
                 df = pd.read_sql_query("SELECT * FROM prediction_logs", conn)
                 
                 if not df.empty:
@@ -183,11 +222,14 @@ def dashboard():
                         df = df[df['timestamp'] <= end_date]
                     
                     # Update summary with filtered data
-                    summary['df_tail'] = clean_dataframe_for_json(df)
                     summary['total'] = len(df)
-                    summary['anomalies'] = int(df['anomaly'].sum()) if not df.empty else 0
+                    summary['anomalies'] = int(df['anomaly'].sum()) if not df.empty and 'anomaly' in df.columns else 0
                     summary['normal'] = summary['total'] - summary['anomalies']
                     summary['anomaly_rate'] = (summary['anomalies'] / summary['total'] * 100) if summary['total'] > 0 else 0
+                    
+                    # CRITICAL: Update df_tail with filtered data
+                    df_tail_filtered = df.head(100) if not df.empty else pd.DataFrame()
+                    summary['df_tail'] = clean_dataframe_for_json(df_tail_filtered)
                     
                     # Handle last_updated for filtered data
                     if not df.empty and 'timestamp' in df.columns:
@@ -201,13 +243,23 @@ def dashboard():
                         summary['timestamps'] = df['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S').where(
                             pd.notna(df['timestamp']), 'N/A'
                         ).tolist()
-                        summary['anomaly_flags'] = df['anomaly'].tolist()
+                        summary['anomaly_flags'] = df['anomaly'].tolist() if 'anomaly' in df.columns else []
                     else:
                         summary['timestamps'] = []
                         summary['anomaly_flags'] = []
+                        
         except Exception as e:
             print(f"[ERROR] Error filtering data: {e}")
             # Keep original summary data if filtering fails
+            # Ensure df_tail exists even on error
+            if 'df_tail' not in summary:
+                summary['df_tail'] = []
+    
+    # Ensure df_tail always exists
+    if 'df_tail' not in summary:
+        summary['df_tail'] = []
+    
+    print(f"[DEBUG] Dashboard rendering with {len(summary.get('df_tail', []))} records in df_tail")
     
     return render_template("dashboard_v5.html", summary=summary, start_date=start_date, end_date=end_date, active_page='dashboard')
 
