@@ -467,7 +467,7 @@ class DataFeedSimulator:
         """Start all data feeds to simulate a real environment"""
         self.running = True
         
-        print("🚀 Starting Real-World Data Feed Simulation...")
+        print("Starting Real-World Data Feed Simulation...")
         print("=" * 60)
         
         # Start different data sources
