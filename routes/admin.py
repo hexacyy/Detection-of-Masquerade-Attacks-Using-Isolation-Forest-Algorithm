@@ -73,6 +73,8 @@ def reset_password(user_id):
     flash("✅ Password reset successfully.", "info")
     return redirect(url_for('admin.manage_users'))
 
+# Replace your clear_predictions function in routes/admin.py with this:
+
 @admin_bp.route('/clear_predictions', methods=['POST'])
 @login_required(role='admin')
 def clear_predictions():
@@ -85,8 +87,12 @@ def clear_predictions():
         conn = sqlite3.connect(db_path)
         c = conn.cursor()
 
-        # Optional backup
+        # Get current month for preservation logic
+        current_month = datetime.now(timezone.utc).strftime('%Y-%m')
+        
+        # IMPORTANT: Only clear current month's NEW data, preserve older months
         backup_df = pd.read_sql_query("SELECT * FROM prediction_logs", conn)
+        
         if not backup_df.empty:
             # Create backup folder if it doesn't exist
             backup_folder = "backup"
@@ -101,9 +107,17 @@ def clear_predictions():
             backup_df.to_csv(backup_path, index=False)
             print(f"[INFO] Backup saved to {backup_path}")
 
-        # Clear the table
+            # Separate data by month
+            current_month_data = backup_df[backup_df['log_month'] == current_month]
+            historical_data = backup_df[backup_df['log_month'] != current_month]
+            
+            print(f"[INFO] Current month ({current_month}) records: {len(current_month_data)}")
+            print(f"[INFO] Historical records to preserve: {len(historical_data)}")
+
+        # Clear ALL data first
         c.execute("DELETE FROM prediction_logs")
-        # Optionally drop and recreate the table if you want to reset the structure
+        
+        # Recreate the table structure
         c.execute("DROP TABLE IF EXISTS prediction_logs")
         c.execute("""
             CREATE TABLE prediction_logs (
@@ -135,21 +149,54 @@ def clear_predictions():
             )
         """)
 
-        # Reset AUTOINCREMENT counter
-        c.execute("DELETE FROM sqlite_sequence WHERE name='prediction_logs'")
+        # CRITICAL: Restore historical data (previous months) back to database
+        if not backup_df.empty and len(historical_data) > 0:
+            print(f"[INFO] Restoring {len(historical_data)} historical records...")
+            
+            for _, row in historical_data.iterrows():
+                c.execute("""
+                    INSERT INTO prediction_logs 
+                    (timestamp, log_month, anomaly, explanation, network_packet_size, 
+                     login_attempts, session_duration, ip_reputation_score, failed_logins, 
+                     unusual_time_access, protocol_type_ICMP, protocol_type_TCP, protocol_type_UDP,
+                     encryption_used_AES, encryption_used_DES, browser_type_Chrome, browser_type_Edge,
+                     browser_type_Firefox, browser_type_Safari, browser_type_Unknown, 
+                     risk_score, anomaly_score, profile_used, user_role)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    row['timestamp'], row['log_month'], row['anomaly'], row['explanation'], 
+                    row['network_packet_size'], row['login_attempts'], row['session_duration'],
+                    row['ip_reputation_score'], row['failed_logins'], row['unusual_time_access'],
+                    row['protocol_type_ICMP'], row['protocol_type_TCP'], row['protocol_type_UDP'],
+                    row['encryption_used_AES'], row['encryption_used_DES'], row['browser_type_Chrome'],
+                    row['browser_type_Edge'], row['browser_type_Firefox'], row['browser_type_Safari'],
+                    row['browser_type_Unknown'], row['risk_score'], row['anomaly_score'],
+                    row['profile_used'], row['user_role']
+                ))
+            
+            print(f"[SUCCESS] Historical data preserved in Static Report")
+
         conn.commit()
         conn.close()
 
         # Regenerate summary to reflect the cleared state
+        from routes.dashboard import generate_summary_internal
         generate_summary_internal()
 
-        flash("✅ Prediction logs have been cleared and backed up.", "info")
-        return redirect(url_for('dashboard.dashboard'))
+        if len(historical_data) > 0:
+            flash(f"✅ Current month's prediction logs cleared. {len(historical_data)} historical records preserved for Static Report.", "success")
+        else:
+            flash("✅ Prediction logs have been cleared and backed up.", "success")
+            
+        print(f"[SUCCESS] Clear completed - Historical data preserved")
 
     except Exception as e:
-        print(f"[ERROR] Failed to clear predictions: {str(e)}")
+        print(f"[ERROR] Clear predictions failed: {e}")
+        import traceback
+        traceback.print_exc()
         flash(f"❌ Failed to clear predictions: {str(e)}", "danger")
-        return redirect(url_for('dashboard.dashboard'))
+
+    return redirect(url_for('dashboard.dashboard'))
 
 @admin_bp.route('/restore_backup', methods=['GET', 'POST'])
 @login_required(role='admin')
@@ -370,50 +417,152 @@ def restore_backup():
 
     return render_template("restore_backup.html")
 
+# Replace your archive_last_month function in routes/admin.py with this:
+
 @admin_bp.route('/archive', methods=['POST'])
 @login_required(role='admin')
 def archive_last_month():
+    """
+    Enhanced archive function that:
+    1. Archives last month's data to CSV files
+    2. Optionally moves data to separate database
+    3. Creates comprehensive summary reports
+    """
     try:
         # Get current and previous month
         now = datetime.utcnow()
+        current_month = now.strftime('%Y-%m')
         prev_month = (now.replace(day=1) - timedelta(days=1)).strftime('%Y-%m')
+        
+        print(f"[DEBUG] Current month: {current_month}, Previous month: {prev_month}")
 
-        conn = sqlite3.connect("prediction_logs.db")
-        df = pd.read_sql_query("SELECT * FROM prediction_logs WHERE log_month = ?", conn, params=(prev_month,))
+        # Connect to current database
+        db_path = get_monthly_db_path()
+        conn = sqlite3.connect(db_path)
+        
+        # Query for previous month's data
+        df = pd.read_sql_query(
+            "SELECT * FROM prediction_logs WHERE log_month = ? ORDER BY timestamp", 
+            conn, 
+            params=(prev_month,)
+        )
         conn.close()
 
         if df.empty:
-            flash(f"No logs found for {prev_month}.", "warning")
+            flash(f"❌ No logs found for {prev_month} to archive.", "warning")
             return redirect(url_for('dashboard.report'))
 
-        # Save logs as CSV
-        log_path = f"archives/prediction_log_{prev_month}.csv"
-        df.to_csv(log_path, index=False)
+        # Create archives directory
+        archives_dir = "archives"
+        if not os.path.exists(archives_dir):
+            os.makedirs(archives_dir)
+            print(f"[INFO] Created archives directory: {archives_dir}")
 
-        # Generate summary
+        # Archive data to CSV
+        archive_timestamp = now.strftime('%Y%m%d_%H%M%S')
+        log_path = f"{archives_dir}/prediction_logs_{prev_month}_{archive_timestamp}.csv"
+        df.to_csv(log_path, index=False)
+        print(f"[INFO] Data archived to: {log_path}")
+
+        # Generate comprehensive summary
         total = len(df)
         anomalies = df['anomaly'].sum()
         normal = total - anomalies
-        anomaly_rate = round((anomalies / total) * 100, 2)
+        anomaly_rate = round((anomalies / total) * 100, 2) if total > 0 else 0
+
+        # Additional analytics
+        avg_risk_score = df['risk_score'].mean() if 'risk_score' in df.columns else 0
+        high_risk_sessions = len(df[df['risk_score'] > 0.8]) if 'risk_score' in df.columns else 0
+        
+        # User role breakdown
+        user_role_breakdown = df['user_role'].value_counts().to_dict() if 'user_role' in df.columns else {}
+        
+        # Time range
+        first_entry = df['timestamp'].min() if not df.empty else 'N/A'
+        last_entry = df['timestamp'].max() if not df.empty else 'N/A'
 
         summary = {
+            "month": prev_month,
             "total_sessions": total,
             "anomalies_detected": int(anomalies),
             "normal_sessions": int(normal),
             "anomaly_rate_percent": anomaly_rate,
-            "first_entry_time": df['timestamp'].min(),
-            "last_entry_time": df['timestamp'].max(),
-            "archived_at": datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+            "average_risk_score": round(float(avg_risk_score), 3) if avg_risk_score else 0,
+            "high_risk_sessions": int(high_risk_sessions),
+            "user_role_breakdown": json.dumps(user_role_breakdown),
+            "first_entry_time": first_entry,
+            "last_entry_time": last_entry,
+            "archived_at": now.strftime('%Y-%m-%d %H:%M:%S'),
+            "archived_by": session.get('username', 'Unknown'),
+            "total_records_archived": total
         }
 
-        with open(f"archives/summary_report_{prev_month}.csv", "w", newline='') as f:
+        # Save summary report
+        summary_path = f"{archives_dir}/summary_report_{prev_month}_{archive_timestamp}.csv"
+        with open(summary_path, "w", newline='') as f:
             writer = csv.DictWriter(f, fieldnames=summary.keys())
             writer.writeheader()
             writer.writerow(summary)
 
-        flash(f"Archived logs for {prev_month} successfully.", "success")
+        # Optional: Create separate database for archived month
+        archive_db_path = f"{archives_dir}/prediction_logs_{prev_month.replace('-', '')}.db"
+        if not os.path.exists(archive_db_path):
+            with sqlite3.connect(archive_db_path) as archive_conn:
+                c = archive_conn.cursor()
+                c.execute('''CREATE TABLE IF NOT EXISTS prediction_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT,
+                    log_month TEXT,
+                    anomaly INTEGER,
+                    explanation TEXT,
+                    network_packet_size INTEGER,
+                    login_attempts INTEGER,
+                    session_duration REAL,
+                    ip_reputation_score REAL,
+                    failed_logins INTEGER,
+                    unusual_time_access INTEGER,
+                    protocol_type_ICMP INTEGER,
+                    protocol_type_TCP INTEGER,
+                    protocol_type_UDP INTEGER,
+                    encryption_used_AES INTEGER,
+                    encryption_used_DES INTEGER,
+                    browser_type_Chrome INTEGER,
+                    browser_type_Edge INTEGER,
+                    browser_type_Firefox INTEGER,
+                    browser_type_Safari INTEGER,
+                    browser_type_Unknown INTEGER,
+                    risk_score REAL,
+                    anomaly_score REAL,
+                    profile_used TEXT,
+                    user_role TEXT
+                )''')
+                
+                # Insert all records
+                for _, row in df.iterrows():
+                    c.execute("""
+                        INSERT INTO prediction_logs 
+                        (timestamp, log_month, anomaly, explanation, network_packet_size,
+                         login_attempts, session_duration, ip_reputation_score, failed_logins,
+                         unusual_time_access, protocol_type_ICMP, protocol_type_TCP, protocol_type_UDP,
+                         encryption_used_AES, encryption_used_DES, browser_type_Chrome, browser_type_Edge,
+                         browser_type_Firefox, browser_type_Safari, browser_type_Unknown,
+                         risk_score, anomaly_score, profile_used, user_role)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, tuple(row))
+                
+                archive_conn.commit()
+                print(f"[INFO] Created separate archive database: {archive_db_path}")
+
+        flash(f"✅ Successfully archived {total} records for {prev_month}. "
+              f"Files saved: CSV ({log_path}) and Summary ({summary_path})", "success")
+        
+        print(f"[SUCCESS] Archive completed: {total} records for {prev_month}")
+
         return redirect(url_for('dashboard.report'))
 
     except Exception as e:
-        flash(f"Archiving failed: {str(e)}", "danger")
+        print(f"[ERROR] Archiving failed: {e}")
+        import traceback
+        traceback.print_exc()
+        flash(f"❌ Archiving failed: {str(e)}", "danger")
         return redirect(url_for('dashboard.report'))

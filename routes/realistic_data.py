@@ -1,8 +1,3 @@
-"""
-Integration plan for realistic data sources in your Flask app
-Add these routes to make data meaningful instead of random numbers
-"""
-
 from flask import Blueprint, jsonify, request
 import pandas as pd
 import random

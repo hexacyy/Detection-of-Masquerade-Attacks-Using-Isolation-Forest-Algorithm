@@ -30,96 +30,133 @@ def clean_dataframe_for_json(df):
     # Convert to records (list of dictionaries)
     return df_clean.to_dict(orient='records')
 
+
+
 def generate_summary_internal(selected_month=None):
+    """
+    Enhanced summary generation that properly handles monthly data
+    and preserves historical information for Static Report
+    """
     try:
-        if selected_month:
-            db_path = f"prediction_logs_{selected_month.replace('-', '')}.db"
-        else:
-            db_path = get_monthly_db_path()
-        print(f"[DEBUG] Using database: {db_path}")
-
-        df = pd.DataFrame()
-        if os.path.exists(db_path):
-            with sqlite3.connect(db_path) as conn:
-                df = pd.read_sql_query("SELECT * FROM prediction_logs", conn)
-                print(f"[DEBUG] Total rows in {db_path}: {len(df)}")
-
-        available_months = sorted([f.replace('prediction_logs_', '').replace('.db', '-01')[:-3] 
-                                 for f in os.listdir('.') 
-                                 if f.startswith('prediction_logs_') and f.endswith('.db')], reverse=True)
-        print(f"[DEBUG] Available months: {available_months}")
-
-        if df.empty:
-            print("[INFO] No data in selected database to summarize.")
+        db_path = get_monthly_db_path()
+        
+        if not os.path.exists(db_path):
             return {
                 'total': 0,
                 'anomalies': 0,
                 'normal': 0,
                 'anomaly_rate': 0.0,
-                'last_updated': 'N/A',
-                'df_tail': [],
+                'last_updated': 'No data',
+                'available_months': [],
                 'timestamps': [],
-                'anomaly_flags': [],
-                'available_months': available_months
+                'anomaly_flags': []
             }
 
-        # Ensure timestamp is in datetime format
-        if 'timestamp' in df.columns and not pd.api.types.is_datetime64_any_dtype(df['timestamp']):
-            df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
-            print("[DEBUG] Converted timestamp to datetime")
+        with sqlite3.connect(db_path) as conn:
+            # First, get all available months for the dropdown
+            available_months_df = pd.read_sql_query(
+                "SELECT DISTINCT log_month FROM prediction_logs WHERE log_month IS NOT NULL ORDER BY log_month DESC", 
+                conn
+            )
+            available_months = available_months_df['log_month'].tolist()
 
+            # Build the main query based on selected month
+            if selected_month:
+                query = "SELECT * FROM prediction_logs WHERE log_month = ? ORDER BY timestamp DESC"
+                params = (selected_month,)
+                print(f"[DEBUG] Filtering by month: {selected_month}")
+            else:
+                # Show all data when no month is selected
+                query = "SELECT * FROM prediction_logs ORDER BY timestamp DESC"
+                params = ()
+                print(f"[DEBUG] Showing all months")
+
+            df = pd.read_sql_query(query, conn, params=params)
+
+        if df.empty:
+            return {
+                'total': 0,
+                'anomalies': 0,
+                'normal': 0,
+                'anomaly_rate': 0.0,
+                'last_updated': 'No data',
+                'available_months': available_months,
+                'timestamps': [],
+                'anomaly_flags': [],
+                'selected_month_summary': f"No data found for {selected_month}" if selected_month else "No data available"
+            }
+
+        # Convert timestamp column to datetime
+        if 'timestamp' in df.columns:
+            df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+
+        # Calculate summary statistics
         total = len(df)
-        anomalies = df['anomaly'].sum() if not df.empty else 0
-        normal = total - anomalies if total > 0 else 0
+        anomalies = df['anomaly'].sum() if 'anomaly' in df.columns else 0
+        normal = total - anomalies
         anomaly_rate = (anomalies / total * 100) if total > 0 else 0.0
 
-        # Handle last_updated properly
-        last_updated = 'N/A'
+        # Get last updated timestamp
         if not df.empty and 'timestamp' in df.columns:
-            max_timestamp = df['timestamp'].max()
-            if pd.notna(max_timestamp):
-                last_updated = max_timestamp.strftime('%Y-%m-%d %H:%M:%S')
-        print(f"[DEBUG] Last updated: {last_updated}")
+            valid_timestamps = df['timestamp'].dropna()
+            if not valid_timestamps.empty:
+                last_updated = valid_timestamps.max().strftime('%Y-%m-%d %H:%M:%S')
+            else:
+                last_updated = 'Unknown'
+        else:
+            last_updated = 'No timestamps'
 
-        # Clean df_tail for JSON serialization
-        df_tail_clean = clean_dataframe_for_json(df)
-
-        # Handle timestamps and anomaly flags
+        # Prepare timeline data
         timestamps = []
         anomaly_flags = []
+        
         if not df.empty and 'timestamp' in df.columns:
-            # Convert timestamps to strings, handling NaT values
-            timestamps = df['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S').where(
-                pd.notna(df['timestamp']), 'N/A'
+            # Limit to recent 1000 records for performance
+            recent_df = df.head(1000)
+            
+            timestamps = recent_df['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S').where(
+                pd.notna(recent_df['timestamp']), 'N/A'
             ).tolist()
-            anomaly_flags = df['anomaly'].tolist()
+            
+            anomaly_flags = recent_df['anomaly'].tolist() if 'anomaly' in recent_df.columns else [0] * len(recent_df)
 
-        return {
-            'total': total,
+        # Add month-specific summary
+        month_summary = f"Showing data for {selected_month}" if selected_month else f"Showing all {len(available_months)} months"
+        if selected_month:
+            month_summary += f" ({total} sessions, {anomalies} anomalies, {anomaly_rate:.1f}% anomaly rate)"
+
+        summary = {
+            'total': int(total),
             'anomalies': int(anomalies),
-            'normal': normal,
-            'anomaly_rate': round(anomaly_rate, 2),
+            'normal': int(normal),
+            'anomaly_rate': round(float(anomaly_rate), 2),
             'last_updated': last_updated,
-            'df_tail': df_tail_clean,
+            'available_months': available_months,
             'timestamps': timestamps,
             'anomaly_flags': anomaly_flags,
-            'available_months': available_months
+            'selected_month_summary': month_summary,
+            'data_source': f"Database: {os.path.basename(db_path)}",
+            'query_month': selected_month or 'All months'
         }
 
+        print(f"[DEBUG] Summary generated: {total} total, {anomalies} anomalies, {len(available_months)} months available")
+        return summary
+
     except Exception as e:
-        print(f"[ERROR] Failed to generate summary: {e}")
+        print(f"[ERROR] Summary generation failed: {e}")
         import traceback
         traceback.print_exc()
+        
         return {
             'total': 0,
-            'anomalies': 0,
+            'anomalies': 0, 
             'normal': 0,
             'anomaly_rate': 0.0,
-            'last_updated': 'N/A',
-            'df_tail': [],
+            'last_updated': f'Error: {str(e)}',
+            'available_months': [],
             'timestamps': [],
             'anomaly_flags': [],
-            'available_months': []
+            'error': str(e)
         }
 
 @dashboard_bp.route('/dashboard')
