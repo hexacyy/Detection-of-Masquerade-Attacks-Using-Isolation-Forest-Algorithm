@@ -1,0 +1,160 @@
+{
+  "data_source": "cybersecurity_intrusion_data.csv",
+  "analysis_date": "2025-07-31",
+  "legitimate_sessions_count": 5273,
+  "attack_sessions_count": 4264,
+  "legitimate_profile": {
+    "failed_logins": {
+      "mean": 1.18,
+      "std": 0.74,
+      "median": 1,
+      "q1": 1,
+      "q3": 2,
+      "typical_max": 2,
+      "warning_threshold": 3,
+      "critical_threshold": 4
+    },
+    "ip_reputation_score": {
+      "mean": 0.3,
+      "std": 0.15,
+      "median": 0.29,
+      "q1": 0.18,
+      "q3": 0.41,
+      "typical_max": 0.6,
+      "warning_threshold": 0.7,
+      "critical_threshold": 0.8
+    },
+    "login_attempts": {
+      "mean": 3.54,
+      "std": 1.51,
+      "median": 4,
+      "q1": 2,
+      "q3": 5,
+      "typical_max": 6,
+      "warning_threshold": 7,
+      "critical_threshold": 8
+    },
+    "session_duration": {
+      "mean": 763.32,
+      "std": 728.18,
+      "median": 554.07,
+      "q1": 232.04,
+      "q3": 1066.24,
+      "typical_max": 3000,
+      "warning_threshold": 4000,
+      "critical_threshold": 6000
+    },
+    "network_packet_size": {
+      "mean": 501.64,
+      "std": 197.62,
+      "median": 498,
+      "q1": 368,
+      "q3": 634,
+      "typical_max": 1285,
+      "warning_threshold": 1400,
+      "critical_threshold": 1500
+    },
+    "unusual_time_access": {
+      "legitimate_rate": 0.147,
+      "description": "Off-hours access rate in normal behavior"
+    }
+  },
+  "attack_profile": {
+    "failed_logins": {
+      "mean": 1.94,
+      "std": 1.18,
+      "median": 2,
+      "description": "64% higher than legitimate sessions"
+    },
+    "ip_reputation_score": {
+      "mean": 0.37,
+      "std": 0.2,
+      "median": 0.35,
+      "description": "23% higher than legitimate sessions"
+    },
+    "login_attempts": {
+      "mean": 4.64,
+      "std": 2.27,
+      "median": 4,
+      "description": "31% higher than legitimate sessions"
+    },
+    "unusual_time_access": {
+      "attack_rate": 0.153,
+      "description": "Slightly higher than legitimate, not a strong standalone indicator"
+    }
+  },
+  "detection_thresholds": {
+    "critical_flags": {
+      "failed_logins": 4,
+      "ip_reputation": 0.8,
+      "login_attempts": 8,
+      "session_duration": 6000
+    },
+    "warning_flags": {
+      "failed_logins": 3,
+      "ip_reputation": 0.7,
+      "login_attempts": 7,
+      "session_duration": 4000
+    },
+    "statistical_outliers": {
+      "z_score_threshold": 2.0,
+      "description": "Flag values >2\u03c3 from legitimate mean"
+    }
+  },
+  "risk_patterns": [
+    {
+      "pattern": "multiple_failures_suspicious_ip",
+      "conditions": {
+        "failed_logins": ">=2",
+        "ip_reputation": ">=0.5"
+      },
+      "risk_score": 0.25,
+      "description": "Multiple failures + suspicious IP"
+    },
+    {
+      "pattern": "off_hours_with_failures",
+      "conditions": {
+        "unusual_time_access": "==1",
+        "failed_logins": ">=1"
+      },
+      "risk_score": 0.2,
+      "description": "Off-hours access with authentication failures"
+    },
+    {
+      "pattern": "high_attempts_questionable_ip",
+      "conditions": {
+        "login_attempts": ">=6",
+        "ip_reputation": ">=0.6"
+      },
+      "risk_score": 0.3,
+      "description": "High login attempts from questionable IP"
+    }
+  ],
+  "confidence_levels": {
+    "HIGH": {
+      "threshold": 0.7,
+      "description": "Strong evidence of masquerade attack"
+    },
+    "MEDIUM": {
+      "threshold": 0.4,
+      "description": "Moderate suspicion, investigate further"
+    },
+    "LOW": {
+      "threshold": 0.0,
+      "description": "Minimal risk indicators"
+    }
+  },
+  "metadata": {
+    "baseline_type": "simple_statistical",
+    "features_analyzed": [
+      "failed_logins",
+      "ip_reputation_score",
+      "login_attempts",
+      "session_duration",
+      "unusual_time_access"
+    ],
+    "detection_approach": "threshold_and_statistical",
+    "update_frequency": "monthly_recommended",
+    "version": "1.0"
+  }
+}

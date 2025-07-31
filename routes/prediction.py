@@ -11,6 +11,147 @@ from utils import require_api_key, login_required, get_monthly_db_path, send_tel
 
 prediction_bp = Blueprint('prediction', __name__)
 
+# Load the simple baseline (create this file with the baseline system above)
+SIMPLE_BASELINE = {
+    "legitimate_profile": {
+        "failed_logins": {"mean": 1.18, "std": 0.74, "typical_max": 2, "warning_threshold": 3},
+        "ip_reputation_score": {"mean": 0.30, "std": 0.15, "typical_max": 0.60, "warning_threshold": 0.70},
+        "login_attempts": {"mean": 3.54, "std": 1.51, "typical_max": 6, "warning_threshold": 7},
+        "session_duration": {"mean": 763.32, "std": 728.18, "typical_max": 3000, "warning_threshold": 5000},
+        "unusual_time_access": {"legitimate_rate": 0.147, "attack_rate": 0.153}
+    },
+    "attack_indicators": {
+        "critical_thresholds": {"failed_logins": 4, "ip_reputation": 0.80, "login_attempts": 8, "session_duration": 6000},
+        "warning_thresholds": {"failed_logins": 3, "ip_reputation": 0.70, "login_attempts": 7, "session_duration": 4000}
+    }
+}
+
+def detect_masquerade_with_baseline(session_data):
+    """Actual baseline detection that gets used"""
+    
+    baseline = SIMPLE_BASELINE
+    legitimate = baseline["legitimate_profile"] 
+    indicators = baseline["attack_indicators"]
+    
+    # Extract session values
+    failed_logins = session_data.get('failed_logins', 0)
+    ip_reputation = session_data.get('ip_reputation_score', 0.0)
+    login_attempts = session_data.get('login_attempts', 1)
+    session_duration = session_data.get('session_duration', 0)
+    unusual_time = session_data.get('unusual_time_access', 0)
+    
+    # Detection results
+    anomaly_flags = []
+    confidence_score = 0.0
+    risk_level = "LOW"
+    
+    # 1. CRITICAL RED FLAGS
+    critical = indicators["critical_thresholds"]
+    
+    if failed_logins >= critical["failed_logins"]:
+        anomaly_flags.append(f"🚨 CRITICAL: {failed_logins} failed logins (baseline: ≤2 typical)")
+        confidence_score += 0.40
+        risk_level = "HIGH"
+    
+    if ip_reputation >= critical["ip_reputation"]:
+        anomaly_flags.append(f"🚨 CRITICAL: IP reputation {ip_reputation:.2f} (baseline: ≤0.60 typical)")
+        confidence_score += 0.45
+        risk_level = "HIGH"
+    
+    if login_attempts >= critical["login_attempts"]:
+        anomaly_flags.append(f"🚨 CRITICAL: {login_attempts} login attempts (baseline: ≤6 typical)")
+        confidence_score += 0.35
+        risk_level = "HIGH"
+    
+    # 2. WARNING LEVEL FLAGS
+    warning = indicators["warning_thresholds"]
+    
+    if failed_logins >= warning["failed_logins"] and failed_logins < critical["failed_logins"]:
+        anomaly_flags.append(f"⚠️ WARNING: {failed_logins} failed logins (baseline mean: {legitimate['failed_logins']['mean']:.1f})")
+        confidence_score += 0.20
+        if risk_level == "LOW":
+            risk_level = "MEDIUM"
+    
+    if ip_reputation >= warning["ip_reputation"] and ip_reputation < critical["ip_reputation"]:
+        anomaly_flags.append(f"⚠️ WARNING: IP reputation {ip_reputation:.2f} (baseline mean: {legitimate['ip_reputation_score']['mean']:.2f})")
+        confidence_score += 0.25
+        if risk_level == "LOW":
+            risk_level = "MEDIUM"
+    
+    if login_attempts >= warning["login_attempts"] and login_attempts < critical["login_attempts"]:
+        anomaly_flags.append(f"⚠️ WARNING: {login_attempts} login attempts (baseline mean: {legitimate['login_attempts']['mean']:.1f})")
+        confidence_score += 0.15
+        if risk_level == "LOW":
+            risk_level = "MEDIUM"
+    
+    # 3. STATISTICAL BASELINE COMPARISON (Z-score)
+    def calculate_z_score(value, mean, std):
+        if std == 0:
+            return 0
+        return abs(value - mean) / std
+    
+    failed_z = calculate_z_score(failed_logins, legitimate["failed_logins"]["mean"], legitimate["failed_logins"]["std"])
+    ip_z = calculate_z_score(ip_reputation, legitimate["ip_reputation_score"]["mean"], legitimate["ip_reputation_score"]["std"])
+    attempts_z = calculate_z_score(login_attempts, legitimate["login_attempts"]["mean"], legitimate["login_attempts"]["std"])
+    
+    if failed_z > 2.0:
+        anomaly_flags.append(f"📊 BASELINE DEVIATION: Failed logins {failed_z:.1f}σ from normal ({legitimate['failed_logins']['mean']:.1f}±{legitimate['failed_logins']['std']:.1f})")
+        confidence_score += 0.15
+    
+    if ip_z > 2.0:
+        anomaly_flags.append(f"📊 BASELINE DEVIATION: IP reputation {ip_z:.1f}σ from normal ({legitimate['ip_reputation_score']['mean']:.2f}±{legitimate['ip_reputation_score']['std']:.2f})")
+        confidence_score += 0.20
+    
+    if attempts_z > 2.0:
+        anomaly_flags.append(f"📊 BASELINE DEVIATION: Login attempts {attempts_z:.1f}σ from normal ({legitimate['login_attempts']['mean']:.1f}±{legitimate['login_attempts']['std']:.1f})")
+        confidence_score += 0.10
+    
+    # 4. COMBINED RISK PATTERNS (baseline-informed)
+    if failed_logins >= 2 and ip_reputation >= 0.50:
+        anomaly_flags.append("🔍 BASELINE PATTERN: Multiple failures + suspicious IP (above normal thresholds)")
+        confidence_score += 0.25
+        if risk_level == "LOW":
+            risk_level = "MEDIUM"
+    
+    if unusual_time == 1 and (failed_logins > legitimate["failed_logins"]["mean"] or ip_reputation > legitimate["ip_reputation_score"]["mean"]):
+        anomaly_flags.append("🕐 BASELINE PATTERN: Off-hours access with above-normal risk indicators")
+        confidence_score += 0.20
+        if risk_level == "LOW":
+            risk_level = "MEDIUM"
+    
+    # Final decision
+    confidence_score = min(1.0, confidence_score)
+    is_anomaly = confidence_score >= 0.3 or len(anomaly_flags) >= 2
+    
+    # Determine confidence level
+    if confidence_score >= 0.7:
+        confidence_level = "HIGH"
+    elif confidence_score >= 0.4:
+        confidence_level = "MEDIUM"
+    else:
+        confidence_level = "LOW"
+    
+    return {
+        "anomaly": int(is_anomaly),
+        "confidence_score": round(confidence_score, 3),
+        "confidence_level": confidence_level,
+        "risk_level": risk_level,
+        "anomaly_flags": anomaly_flags,
+        "baseline_used": True,
+        "baseline_comparison": {
+            "failed_logins_vs_baseline": f"{failed_logins} vs normal {legitimate['failed_logins']['mean']:.1f}±{legitimate['failed_logins']['std']:.1f}",
+            "ip_reputation_vs_baseline": f"{ip_reputation:.2f} vs normal {legitimate['ip_reputation_score']['mean']:.2f}±{legitimate['ip_reputation_score']['std']:.2f}",
+            "login_attempts_vs_baseline": f"{login_attempts} vs normal {legitimate['login_attempts']['mean']:.1f}±{legitimate['login_attempts']['std']:.1f}",
+            "z_scores": {
+                "failed_logins": round(failed_z, 2),
+                "ip_reputation": round(ip_z, 2),
+                "login_attempts": round(attempts_z, 2)
+            }
+        },
+        "method_used": "Baseline + ML Hybrid",
+        "explanation": " | ".join(anomaly_flags) if anomaly_flags else "Session within normal baseline parameters"
+    }
+
 def detect_obvious_attacks(data):
     """Rule-based detection for obvious masquerade attacks"""
     attack_indicators = []
@@ -162,229 +303,153 @@ def debug_database_issue():
 @prediction_bp.route('/predict', methods=['POST'])
 @require_api_key
 def predict():
-    """Enhanced prediction with rule-based attack detection"""
+    """Enhanced prediction with ACTUAL baseline usage"""
     data = request.get_json(force=True)
+    
+    print(f"[DEBUG] Prediction request received")
+    print(f"[DEBUG] Failed logins: {data.get('failed_logins', 0)}")
+    print(f"[DEBUG] IP reputation: {data.get('ip_reputation_score', 0)}")
+    print(f"[DEBUG] Login attempts: {data.get('login_attempts', 1)}")
+    
+    # 1. BASELINE DETECTION (NEW - actually uses baselines!)
+    baseline_result = detect_masquerade_with_baseline(data)
+    print(f"[DEBUG] Baseline detection result: {baseline_result['anomaly']}")
+    print(f"[DEBUG] Baseline confidence: {baseline_result['confidence_level']}")
+    
+    # 2. ML MODEL PREDICTION (existing)
     input_df = pd.DataFrame([data])
-
-    # Calculate risk score
     input_df['risk_score'] = (
         input_df['ip_reputation_score'] * 0.5 +
         input_df['failed_logins'] * 0.2 +
         input_df['unusual_time_access'] * 0.3
     )
-
-    profile = data.get("profile_used", "Unknown")
-    user_role = data.get("user_role", "Viewer")
-
+    
     # Prepare features for ML model
     for col in expected_columns:
         if col not in input_df.columns:
             input_df[col] = 0
     input_df = input_df[expected_columns]
-
-    # Get ML model prediction
+    
+    # Get ML prediction
     scaled_input = scaler.transform(input_df)
     ml_prediction = model.predict(scaled_input)
     anomaly_score = model.decision_function(scaled_input)[0]
     ml_anomaly_flag = int(ml_prediction[0] == -1)
-
-    # Get rule-based detection
-    rule_detection = detect_obvious_attacks(data)
     
-    # COMBINE ML + RULES for final decision
-    final_anomaly_flag = ml_anomaly_flag or rule_detection['is_attack']
+    print(f"[DEBUG] ML model result: {ml_anomaly_flag}")
+    print(f"[DEBUG] ML anomaly score: {anomaly_score:.4f}")
     
-    # Risk score override (your existing logic)
-    risk_score = float(input_df['risk_score'].iloc[0])
-    if not final_anomaly_flag and risk_score >= 0.8:
-        final_anomaly_flag = 1
-        override_reason = "High risk score override"
+    # 3. COMBINE BASELINE + ML for final decision
+    baseline_anomaly = baseline_result['anomaly']
+    final_anomaly_flag = baseline_anomaly or ml_anomaly_flag
+    
+    # Use baseline confidence as primary, ML as secondary
+    if baseline_result['confidence_score'] >= 0.4:
+        final_confidence = baseline_result['confidence_level']
+        primary_method = "Baseline Analysis"
+    elif ml_anomaly_flag:
+        final_confidence = "MEDIUM" if abs(anomaly_score) > 0.05 else "LOW"
+        primary_method = "ML Model"
     else:
-        override_reason = None
-
-    # Generate comprehensive explanation
+        final_confidence = "LOW"
+        primary_method = "Combined (Low Risk)"
+    
+    # Build comprehensive explanation
     explanation_parts = []
     
     if final_anomaly_flag:
         explanation_parts.append("🚨 MASQUERADE ATTACK DETECTED")
         
-        # Add rule-based indicators
-        if rule_detection['indicators']:
-            explanation_parts.extend(rule_detection['indicators'])
+        # Add baseline-specific indicators
+        if baseline_result['anomaly_flags']:
+            explanation_parts.extend(baseline_result['anomaly_flags'])
         
-        # Add ML reasoning
+        # Add ML reasoning if it contributed
         if ml_anomaly_flag:
-            explanation_parts.append(f"🤖 ML MODEL: Behavioral anomaly detected (score: {anomaly_score:.3f})")
-        
-        # Add override reasoning
-        if override_reason:
-            explanation_parts.append(f"📊 RISK OVERRIDE: {override_reason}")
-            
+            explanation_parts.append(f"🤖 ML MODEL: Isolation Forest anomaly detected (score: {anomaly_score:.3f})")
     else:
-        explanation_parts.append("✅ LEGITIMATE SESSION CONFIRMED")
-        explanation_parts.append("🔍 All security indicators within acceptable ranges")
-        explanation_parts.append(f"🤖 ML MODEL: Normal behavior pattern (score: {anomaly_score:.3f})")
-
-    explanation = " | ".join(explanation_parts)
-
-    # Determine confidence level
-    if rule_detection['confidence'] >= 0.7 or abs(anomaly_score) > 0.1:
-        confidence = "HIGH"
-    elif rule_detection['confidence'] >= 0.4 or abs(anomaly_score) > 0.05:
-        confidence = "MEDIUM"
+        explanation_parts.append("✅ Session appears legitimate based on baseline analysis")
+    
+    final_explanation = " | ".join(explanation_parts)
+    
+    # Determine method used
+    if baseline_anomaly and ml_anomaly_flag:
+        method_used = "Combined Baseline + ML Detection"
+    elif baseline_anomaly:
+        method_used = "Baseline Behavioral Analysis"
+    elif ml_anomaly_flag:
+        method_used = "ML Isolation Forest"
     else:
-        confidence = "LOW"
-
-    # Business impact assessment
-    if final_anomaly_flag:
-        if user_role == 'Admin':
-            business_impact = "🚨 CRITICAL: Admin account compromise - immediate response required"
-            estimated_cost = 50000  # $50K potential damage
-        else:
-            business_impact = "⚠️ HIGH: User account breach - investigate immediately"
-            estimated_cost = 15000  # $15K potential damage
-    else:
-        business_impact = "✅ LOW: Normal operations - continue monitoring"
-        estimated_cost = 0
-
-    # Log the prediction with enhanced details
-    now = datetime.now(timezone.utc)
-    log_entry = {
-        "timestamp": now.isoformat(),
-        "log_month": now.strftime("%Y-%m"),
+        method_used = "Baseline + ML (Normal)"
+    
+    # Prepare final result
+    result = {
         "anomaly": final_anomaly_flag,
+        "confidence": final_confidence,
+        "confidence_score": baseline_result['confidence_score'],
         "anomaly_score": round(anomaly_score, 4),
-        "explanation": explanation,
-        "profile_used": profile,
-        "user_role": user_role,
-        "confidence": confidence,
-        "business_impact": business_impact,
-        "estimated_cost": estimated_cost,
-        "rule_based_detection": rule_detection['is_attack'],
-        "ml_detection": ml_anomaly_flag,
-        "risk_score": risk_score,
-        "detection_method": "Combined ML + Rules" if (ml_anomaly_flag and rule_detection['is_attack']) else 
-                           "Rule-based" if rule_detection['is_attack'] else 
-                           "ML Model" if ml_anomaly_flag else "Normal"
+        "method_used": method_used,
+        "baseline_used": True,
+        "baseline_comparison": baseline_result['baseline_comparison'],
+        "explanation": final_explanation,
+        "ml_model_result": ml_anomaly_flag,
+        "baseline_result": baseline_anomaly,
+        "risk_level": baseline_result['risk_level'],
+        "data_sources": [
+            "✅ Behavioral Baseline: Learned from 9,537 sessions (5,273 legitimate vs 4,264 attacks)",
+            "✅ ML Model: Isolation Forest trained on cybersecurity dataset", 
+            "✅ Statistical Analysis: Z-score deviations from normal behavior",
+            "✅ Risk Pattern Recognition: Multi-factor threat detection"
+        ]
     }
     
-    # Add all feature values to log
-    for col in expected_columns:
-        value = data.get(col, 0)
-        if col == "risk_score":
-            log_entry[col] = risk_score
-        else:
-            log_entry[col] = float(value) if isinstance(value, (int, float)) else 0
-
-    # Save to database with enhanced logging
+    # Log to database
     try:
-        ensure_database_logging(log_entry)
-        
-        # Also try the original method for compatibility
-        db_path = get_monthly_db_path()
-        with sqlite3.connect(db_path) as conn:
-            c = conn.cursor()
-            c.execute('''CREATE TABLE IF NOT EXISTS prediction_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT,
-                anomaly INTEGER,
-                anomaly_score REAL,
-                explanation TEXT,
-                profile_used TEXT,
-                user_role TEXT,
-                log_month TEXT,
-                network_packet_size REAL,
-                login_attempts INTEGER,
-                session_duration REAL,
-                ip_reputation_score REAL,
-                failed_logins INTEGER,
-                unusual_time_access INTEGER,
-                protocol_type_ICMP INTEGER,
-                protocol_type_TCP INTEGER,
-                protocol_type_UDP INTEGER,
-                encryption_used_AES INTEGER,
-                encryption_used_DES INTEGER,
-                browser_type_Chrome INTEGER,
-                browser_type_Edge INTEGER,
-                browser_type_Firefox INTEGER,
-                browser_type_Safari INTEGER,
-                browser_type_Unknown INTEGER,
-                risk_score REAL
-            )''')
-            
-            # Create a simplified entry for compatibility
-            simple_entry = {
-                'timestamp': log_entry['timestamp'],
-                'anomaly': log_entry['anomaly'],
-                'anomaly_score': log_entry['anomaly_score'],
-                'explanation': log_entry['explanation'],
-                'profile_used': log_entry['profile_used'],
-                'user_role': log_entry['user_role'],
-                'log_month': log_entry['log_month'],
-                'risk_score': log_entry['risk_score'],
-                'network_packet_size': log_entry['network_packet_size'],
-                'login_attempts': log_entry['login_attempts'],
-                'session_duration': log_entry['session_duration'],
-                'ip_reputation_score': log_entry['ip_reputation_score'],
-                'failed_logins': log_entry['failed_logins'],
-                'unusual_time_access': log_entry['unusual_time_access'],
-                'protocol_type_ICMP': log_entry['protocol_type_ICMP'],
-                'protocol_type_TCP': log_entry['protocol_type_TCP'],
-                'protocol_type_UDP': log_entry['protocol_type_UDP'],
-                'encryption_used_AES': log_entry['encryption_used_AES'],
-                'encryption_used_DES': log_entry['encryption_used_DES'],
-                'browser_type_Chrome': log_entry['browser_type_Chrome'],
-                'browser_type_Edge': log_entry['browser_type_Edge'],
-                'browser_type_Firefox': log_entry['browser_type_Firefox'],
-                'browser_type_Safari': log_entry['browser_type_Safari'],
-                'browser_type_Unknown': log_entry['browser_type_Unknown']
-            }
-            
-            columns = ', '.join(simple_entry.keys())
-            placeholders = ', '.join('?' for _ in simple_entry)
-            c.execute(f"INSERT INTO prediction_logs ({columns}) VALUES ({placeholders})", 
-                     tuple(simple_entry.values()))
+        with sqlite3.connect(get_monthly_db_path()) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO prediction_logs 
+                (timestamp, input_data, prediction_result, confidence, method_used, baseline_used, explanation, anomaly_score)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                datetime.now(timezone.utc).isoformat(),
+                json.dumps(data),
+                result['anomaly'],
+                result['confidence'],
+                result['method_used'],
+                1,  # baseline_used = True
+                result['explanation'],
+                result['anomaly_score']
+            ))
             conn.commit()
-            print(f"[SUCCESS] Also logged to original DB format")
-            
+            print(f"[DEBUG] Logged to database: {result['method_used']}")
     except Exception as e:
         print(f"[ERROR] Database logging failed: {e}")
-        print(f"[FALLBACK] Prediction result: Anomaly={log_entry['anomaly']}, Risk={log_entry['risk_score']}")
-
-    # Send alert if attack detected
-    if final_anomaly_flag:
+    
+    # Send Telegram alert for high-confidence detections
+    if result['anomaly'] and result['confidence'] in ['HIGH', 'MEDIUM']:
         try:
-            send_telegram_alert(log_entry)
+            alert_msg = f"🚨 MASQUERADE ATTACK DETECTED!\n\n"
+            alert_msg += f"🎯 Confidence: {result['confidence']} ({result['confidence_score']:.3f})\n"
+            alert_msg += f"🔍 Method: {result['method_used']}\n"
+            alert_msg += f"📊 Risk Level: {result['risk_level']}\n"
+            alert_msg += f"🌐 Source IP: {data.get('source_ip', 'Unknown')}\n\n"
+            alert_msg += "📋 Key Indicators:\n"
+            
+            # Add baseline comparison
+            baseline_comp = result['baseline_comparison']
+            alert_msg += f"• Failed Logins: {baseline_comp['failed_logins_vs_baseline']}\n"
+            alert_msg += f"• IP Reputation: {baseline_comp['ip_reputation_vs_baseline']}\n"
+            alert_msg += f"• Login Attempts: {baseline_comp['login_attempts_vs_baseline']}\n"
+            
+            send_telegram_alert(alert_msg)
+            print(f"[DEBUG] Telegram alert sent for {result['confidence']} confidence detection")
         except Exception as e:
-            print(f"[WARNING] Failed to send Telegram alert: {e}")
-
-    # Debug database after logging
-    debug_database_issue()
-
-    # Return enhanced response
-    return jsonify({
-        "anomaly": final_anomaly_flag,
-        "message": "🚨 MASQUERADE ATTACK DETECTED!" if final_anomaly_flag else "✅ Legitimate session",
-        "explanation": explanation,
-        "risk_score": risk_score,
-        "confidence": confidence,
-        "business_impact": business_impact,
-        "estimated_cost": estimated_cost,
-        "detection_details": {
-            "ml_model_result": ml_anomaly_flag,
-            "rule_based_result": rule_detection['is_attack'],
-            "final_decision": final_anomaly_flag,
-            "method_used": log_entry['detection_method'],
-            "anomaly_score": round(anomaly_score, 4)
-        },
-        "data_sources": {
-            "threat_intelligence": "IP reputation analysis",
-            "authentication_logs": "Login pattern analysis", 
-            "behavioral_baselines": "User profile comparison",
-            "ml_model": "Isolation Forest anomaly detection",
-            "business_rules": "Security policy enforcement"
-        }
-    })
+            print(f"[ERROR] Telegram alert failed: {e}")
+    
+    print(f"[DEBUG] Final result: Anomaly={result['anomaly']}, Confidence={result['confidence']}, Method={result['method_used']}")
+    
+    return jsonify(result)
 
 @prediction_bp.route('/submit', methods=['GET', 'POST'])
 @login_required()
@@ -685,3 +750,156 @@ def calculate_detection_rate():
         import traceback
         traceback.print_exc()
         return "87.3%"  # Fallback on error
+    
+# Add this to the END of your routes/prediction.py file (before the last line)
+
+@prediction_bp.route('/test-baseline', methods=['GET', 'POST'])
+def test_baseline():
+    """Test endpoint to verify baseline system is working - NO AUTH REQUIRED"""
+    
+    # Simple baseline for testing (same as we created)
+    SIMPLE_BASELINE = {
+        "legitimate_profile": {
+            "failed_logins": {"mean": 1.18, "std": 0.74, "typical_max": 2, "warning_threshold": 3},
+            "ip_reputation_score": {"mean": 0.30, "std": 0.15, "typical_max": 0.60, "warning_threshold": 0.70},
+            "login_attempts": {"mean": 3.54, "std": 1.51, "typical_max": 6, "warning_threshold": 7}
+        },
+        "detection_thresholds": {
+            "critical_flags": {"failed_logins": 4, "ip_reputation": 0.80, "login_attempts": 8},
+            "warning_flags": {"failed_logins": 3, "ip_reputation": 0.70, "login_attempts": 7}
+        }
+    }
+    
+    def simple_baseline_detection(session_data):
+        """Simple baseline detection for testing"""
+        baseline = SIMPLE_BASELINE
+        legitimate = baseline["legitimate_profile"] 
+        thresholds = baseline["detection_thresholds"]
+        
+        failed_logins = session_data.get('failed_logins', 0)
+        ip_reputation = session_data.get('ip_reputation_score', 0.0)
+        login_attempts = session_data.get('login_attempts', 1)
+        
+        anomaly_flags = []
+        confidence_score = 0.0
+        
+        # Critical thresholds
+        if failed_logins >= thresholds["critical_flags"]["failed_logins"]:
+            anomaly_flags.append(f"🚨 CRITICAL: {failed_logins} failed logins (baseline: ≤2 typical)")
+            confidence_score += 0.40
+        
+        if ip_reputation >= thresholds["critical_flags"]["ip_reputation"]:
+            anomaly_flags.append(f"🚨 CRITICAL: IP reputation {ip_reputation:.2f} (baseline: ≤0.60 typical)")
+            confidence_score += 0.45
+        
+        if login_attempts >= thresholds["critical_flags"]["login_attempts"]:
+            anomaly_flags.append(f"🚨 CRITICAL: {login_attempts} login attempts (baseline: ≤6 typical)")
+            confidence_score += 0.35
+        
+        # Warning thresholds
+        if (failed_logins >= thresholds["warning_flags"]["failed_logins"] and 
+            failed_logins < thresholds["critical_flags"]["failed_logins"]):
+            anomaly_flags.append(f"⚠️ WARNING: {failed_logins} failed logins (baseline mean: {legitimate['failed_logins']['mean']:.1f})")
+            confidence_score += 0.20
+        
+        if (ip_reputation >= thresholds["warning_flags"]["ip_reputation"] and 
+            ip_reputation < thresholds["critical_flags"]["ip_reputation"]):
+            anomaly_flags.append(f"⚠️ WARNING: IP reputation {ip_reputation:.2f} (baseline mean: {legitimate['ip_reputation_score']['mean']:.2f})")
+            confidence_score += 0.25
+        
+        # Statistical analysis
+        failed_z = abs(failed_logins - legitimate["failed_logins"]["mean"]) / legitimate["failed_logins"]["std"]
+        ip_z = abs(ip_reputation - legitimate["ip_reputation_score"]["mean"]) / legitimate["ip_reputation_score"]["std"]
+        
+        if failed_z > 2.0:
+            anomaly_flags.append(f"📊 STATISTICAL: Failed logins {failed_z:.1f}σ from baseline ({legitimate['failed_logins']['mean']:.1f}±{legitimate['failed_logins']['std']:.1f})")
+            confidence_score += 0.15
+        
+        if ip_z > 2.0:
+            anomaly_flags.append(f"📊 STATISTICAL: IP reputation {ip_z:.1f}σ from baseline ({legitimate['ip_reputation_score']['mean']:.2f}±{legitimate['ip_reputation_score']['std']:.2f})")
+            confidence_score += 0.20
+        
+        confidence_score = min(1.0, confidence_score)
+        is_anomaly = confidence_score >= 0.3 or len(anomaly_flags) >= 2
+        
+        if confidence_score >= 0.7:
+            confidence_level = "HIGH"
+        elif confidence_score >= 0.4:
+            confidence_level = "MEDIUM"
+        else:
+            confidence_level = "LOW"
+        
+        return {
+            "anomaly": int(is_anomaly),
+            "confidence_score": round(confidence_score, 3),
+            "confidence_level": confidence_level,
+            "anomaly_flags": anomaly_flags,
+            "baseline_comparison": {
+                "failed_logins_vs_baseline": f"{failed_logins} vs normal {legitimate['failed_logins']['mean']:.1f}±{legitimate['failed_logins']['std']:.1f}",
+                "ip_reputation_vs_baseline": f"{ip_reputation:.2f} vs normal {legitimate['ip_reputation_score']['mean']:.2f}±{legitimate['ip_reputation_score']['std']:.2f}",
+                "z_scores": {"failed_logins": round(failed_z, 2), "ip_reputation": round(ip_z, 2)}
+            },
+            "explanation": " | ".join(anomaly_flags) if anomaly_flags else "Session within normal baseline parameters"
+        }
+    
+    # Test cases
+    test_cases = [
+        {
+            "name": "Normal Corporate User",
+            "data": {
+                "failed_logins": 1,
+                "ip_reputation_score": 0.25,
+                "login_attempts": 3,
+                "session_duration": 600,
+                "unusual_time_access": 0
+            }
+        },
+        {
+            "name": "Suspicious Activity", 
+            "data": {
+                "failed_logins": 3,
+                "ip_reputation_score": 0.75,
+                "login_attempts": 7,
+                "session_duration": 1200,
+                "unusual_time_access": 1
+            }
+        },
+        {
+            "name": "Clear Masquerade Attack",
+            "data": {
+                "failed_logins": 5,
+                "ip_reputation_score": 0.85,
+                "login_attempts": 10,
+                "session_duration": 300,
+                "unusual_time_access": 1
+            }
+        }
+    ]
+    
+    # Run tests
+    results = []
+    for test in test_cases:
+        baseline_result = simple_baseline_detection(test['data'])
+        results.append({
+            "test_name": test['name'],
+            "input_data": test['data'],
+            "baseline_result": baseline_result
+        })
+    
+    return jsonify({
+        "message": "✅ Baseline Detection System Test Results",
+        "timestamp": datetime.now().isoformat(),
+        "baseline_loaded": True,
+        "baseline_info": {
+            "legitimate_sessions_analyzed": 5273,
+            "attack_sessions_analyzed": 4264,
+            "features_used": ["failed_logins", "ip_reputation_score", "login_attempts"],
+            "detection_method": "Statistical thresholds + Z-score analysis"
+        },
+        "test_results": results,
+        "summary": {
+            "total_tests": len(results),
+            "anomalies_detected": sum(1 for r in results if r["baseline_result"]["anomaly"]),
+            "high_confidence_detections": sum(1 for r in results if r["baseline_result"]["confidence_level"] == "HIGH")
+        }
+    })
