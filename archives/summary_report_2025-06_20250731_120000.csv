@@ -1,0 +1,2 @@
+month,total_sessions,anomalies_detected,normal_sessions,anomaly_rate_percent,average_risk_score,high_risk_sessions,user_role_breakdown,first_entry_time,last_entry_time,archived_at,archived_by,total_records_archived
+2025-06,350,57,293,16.29,0.345,28,"{'user': 100, 'guest': 86, 'developer': 86, 'admin': 78}",2025-06-01 00:33:46,2025-06-30 23:55:59,2025-07-31 01:01:21,system_dummy_data,350

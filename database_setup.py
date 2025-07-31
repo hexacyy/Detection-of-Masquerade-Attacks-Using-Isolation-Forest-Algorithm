@@ -109,7 +109,66 @@ def create_required_directories():
             os.makedirs(directory)
             print(f"Created directory: {directory}")
 
+def create_historical_logs_table():
+    """Create historical_logs table in the current database"""
+    
+    # Get current month's database path
+    current_month = datetime.now().strftime('%Y%m')
+    db_path = f"prediction_logs_{current_month}.db"
+    
+    print(f"Creating historical_logs table in: {db_path}")
+    
+    try:
+        conn = sqlite3.connect(db_path)
+        c = conn.cursor()
+        
+        # Check if table already exists
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='historical_logs'")
+        if c.fetchone():
+            print("historical_logs table already exists")
+            conn.close()
+            return
+        
+        # Create historical_logs table
+        c.execute('''CREATE TABLE IF NOT EXISTS historical_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            log_month TEXT,
+            anomaly INTEGER,
+            explanation TEXT,
+            network_packet_size INTEGER,
+            login_attempts INTEGER,
+            session_duration REAL,
+            ip_reputation_score REAL,
+            failed_logins INTEGER,
+            unusual_time_access INTEGER,
+            protocol_type_ICMP INTEGER,
+            protocol_type_TCP INTEGER,
+            protocol_type_UDP INTEGER,
+            encryption_used_AES INTEGER,
+            encryption_used_DES INTEGER,
+            browser_type_Chrome INTEGER,
+            browser_type_Edge INTEGER,
+            browser_type_Firefox INTEGER,
+            browser_type_Safari INTEGER,
+            browser_type_Unknown INTEGER,
+            risk_score REAL,
+            anomaly_score REAL,
+            profile_used TEXT,
+            user_role TEXT,
+            archived_at TEXT
+        )''')
+        
+        conn.commit()
+        conn.close()
+        
+        print("✅ historical_logs table created successfully")
+        
+    except Exception as e:
+        print(f"❌ Error creating historical_logs table: {e}")
+
 if __name__ == '__main__':
+    create_historical_logs_table()
     print("Initializing database setup...")
     
     # Create required directories
@@ -124,3 +183,4 @@ if __name__ == '__main__':
     print("1. Ensure all required files are in place (models, templates, etc.)")
     print("2. Update webhook.env with your configuration")
     print("3. Run: python app.py")
+

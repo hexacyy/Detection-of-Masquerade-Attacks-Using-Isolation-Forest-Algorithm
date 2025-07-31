@@ -263,11 +263,203 @@ def dashboard():
     
     return render_template("dashboard_v5.html", summary=summary, start_date=start_date, end_date=end_date, active_page='dashboard')
 
+# Replace the report route in routes/dashboard.py
+# Make sure you have this import at the top of the file:
+# from flask import render_template, request, flash
+
 @dashboard_bp.route('/report')
 @login_required()
 def report():
     selected_month = request.args.get('month')
-    summary = generate_summary_internal(selected_month)
+    
+    # Default summary structure
+    summary = {
+        'available_months': [],
+        'df_tail': [],
+        'total': 0,
+        'anomalies': 0,
+        'normal': 0,
+        'last_updated': 'N/A',
+        'timestamps': [],
+        'anomaly_flags': []
+    }
+    
+    try:
+        db_path = get_monthly_db_path()
+        conn = sqlite3.connect(db_path)
+        
+        # Check if historical_logs table exists, create if not
+        c = conn.cursor()
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='historical_logs'")
+        if not c.fetchone():
+            print("[INFO] Creating historical_logs table...")
+            c.execute('''CREATE TABLE IF NOT EXISTS historical_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT,
+                log_month TEXT,
+                anomaly INTEGER,
+                explanation TEXT,
+                network_packet_size INTEGER,
+                login_attempts INTEGER,
+                session_duration REAL,
+                ip_reputation_score REAL,
+                failed_logins INTEGER,
+                unusual_time_access INTEGER,
+                protocol_type_ICMP INTEGER,
+                protocol_type_TCP INTEGER,
+                protocol_type_UDP INTEGER,
+                encryption_used_AES INTEGER,
+                encryption_used_DES INTEGER,
+                browser_type_Chrome INTEGER,
+                browser_type_Edge INTEGER,
+                browser_type_Firefox INTEGER,
+                browser_type_Safari INTEGER,
+                browser_type_Unknown INTEGER,
+                risk_score REAL,
+                anomaly_score REAL,
+                profile_used TEXT,
+                user_role TEXT,
+                archived_at TEXT
+            )''')
+            conn.commit()
+            print("[SUCCESS] historical_logs table created")
+        
+        # Get available months from both tables
+        try:
+            available_months_query = """
+                SELECT DISTINCT log_month 
+                FROM (
+                    SELECT log_month FROM historical_logs 
+                    UNION 
+                    SELECT log_month FROM prediction_logs
+                ) 
+                ORDER BY log_month DESC
+            """
+            available_months = [row[0] for row in conn.execute(available_months_query).fetchall()]
+        except Exception as e:
+            print(f"[WARNING] Error getting available months: {e}")
+            # Fallback: get months from prediction_logs only
+            available_months = [row[0] for row in conn.execute(
+                "SELECT DISTINCT log_month FROM prediction_logs ORDER BY log_month DESC"
+            ).fetchall()]
+        
+        summary['available_months'] = available_months
+        
+        if selected_month:
+            # Load specific month's data
+            try:
+                df_historical = pd.read_sql_query(
+                    "SELECT * FROM historical_logs WHERE log_month = ? ORDER BY timestamp DESC", 
+                    conn, 
+                    params=(selected_month,)
+                )
+            except Exception as e:
+                print(f"[WARNING] Could not load from historical_logs: {e}")
+                df_historical = pd.DataFrame()
+            
+            df_current = pd.read_sql_query(
+                "SELECT * FROM prediction_logs WHERE log_month = ? ORDER BY timestamp DESC", 
+                conn, 
+                params=(selected_month,)
+            )
+            
+            # Combine data
+            if not df_historical.empty and not df_current.empty:
+                # Remove archived_at column if it exists to match schemas
+                if 'archived_at' in df_historical.columns:
+                    df_historical = df_historical.drop(columns=['archived_at'])
+                df = pd.concat([df_historical, df_current], ignore_index=True)
+            elif not df_historical.empty:
+                if 'archived_at' in df_historical.columns:
+                    df_historical = df_historical.drop(columns=['archived_at'])
+                df = df_historical
+            elif not df_current.empty:
+                df = df_current
+            else:
+                df = pd.DataFrame()
+                
+        else:
+            # No month selected - show recent data from both tables
+            try:
+                df_historical = pd.read_sql_query(
+                    "SELECT * FROM historical_logs ORDER BY timestamp DESC LIMIT 500", 
+                    conn
+                )
+                if not df_historical.empty and 'archived_at' in df_historical.columns:
+                    df_historical = df_historical.drop(columns=['archived_at'])
+            except Exception as e:
+                print(f"[WARNING] Could not load from historical_logs: {e}")
+                df_historical = pd.DataFrame()
+                
+            df_current = pd.read_sql_query(
+                "SELECT * FROM prediction_logs ORDER BY timestamp DESC LIMIT 500", 
+                conn
+            )
+            
+            if not df_historical.empty and not df_current.empty:
+                df = pd.concat([df_historical, df_current], ignore_index=True)
+            elif not df_historical.empty:
+                df = df_historical
+            elif not df_current.empty:
+                df = df_current
+            else:
+                df = pd.DataFrame()
+        
+        conn.close()
+        
+        # Generate summary from data
+        if not df.empty:
+            # Convert timestamp with proper timezone handling
+            if 'timestamp' in df.columns:
+                try:
+                    # Try standard format first
+                    df['timestamp'] = pd.to_datetime(df['timestamp'], format='%Y-%m-%d %H:%M:%S')
+                except ValueError:
+                    try:
+                        # Try with mixed formats and UTC handling
+                        df['timestamp'] = pd.to_datetime(df['timestamp'], format='mixed', utc=True)
+                        # Convert to local timezone (remove timezone info for consistency)
+                        df['timestamp'] = df['timestamp'].dt.tz_localize(None)
+                    except ValueError:
+                        # Last resort - let pandas infer and normalize timezone
+                        df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce', utc=True)
+                        df['timestamp'] = df['timestamp'].dt.tz_localize(None)
+                        print("[WARNING] Some timestamps could not be parsed")
+                
+                # Remove any remaining timezone info to avoid comparison issues
+                if df['timestamp'].dt.tz is not None:
+                    df['timestamp'] = df['timestamp'].dt.tz_localize(None)
+                
+                df = df.sort_values('timestamp', ascending=False)
+            
+            summary['total'] = len(df)
+            summary['anomalies'] = int(df['anomaly'].sum()) if 'anomaly' in df.columns else 0
+            summary['normal'] = summary['total'] - summary['anomalies']
+            
+            if 'timestamp' in df.columns and not df.empty:
+                summary['last_updated'] = df['timestamp'].max().strftime('%Y-%m-%d %H:%M:%S')
+            
+            # Get most recent 100 records for display
+            recent_df = df.head(100)
+            summary['df_tail'] = recent_df.to_dict('records')
+            
+            # For charts
+            if 'timestamp' in df.columns:
+                summary['timestamps'] = df['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S').tolist()
+            summary['anomaly_flags'] = df['anomaly'].tolist() if 'anomaly' in df.columns else []
+        
+        print(f"[DEBUG] Static Report loaded: {summary['total']} total records, {len(summary['df_tail'])} displayed")
+        
+    except Exception as e:
+        print(f"[ERROR] Error loading report data: {e}")
+        import traceback
+        traceback.print_exc()
+        try:
+            from flask import flash
+            flash(f"❌ Error loading report data: {str(e)}", "danger")
+        except:
+            print(f"[ERROR] Could not flash error message: {e}")
+    
     return render_template("report.html", summary=summary, selected_month=selected_month)
 
 @dashboard_bp.route('/generate_summary')

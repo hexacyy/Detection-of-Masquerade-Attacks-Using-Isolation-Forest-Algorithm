@@ -73,96 +73,72 @@ def reset_password(user_id):
     flash("✅ Password reset successfully.", "info")
     return redirect(url_for('admin.manage_users'))
 
-# Replace your clear_predictions function in routes/admin.py with this:
+# Replace your clear_predictions function in routes/admin.py
 
 @admin_bp.route('/clear_predictions', methods=['POST'])
 @login_required(role='admin')
 def clear_predictions():
     try:
-        # Use the current month's database
         db_path = get_monthly_db_path()
-        print(f"[DEBUG] Clearing data from: {db_path}")
+        print(f"[DEBUG] Clearing current data from: {db_path}")
 
-        # Connect to SQLite
         conn = sqlite3.connect(db_path)
         c = conn.cursor()
 
-        # Get current month for preservation logic
+        # Get current month
         current_month = datetime.now(timezone.utc).strftime('%Y-%m')
         
-        # IMPORTANT: Only clear current month's NEW data, preserve older months
-        backup_df = pd.read_sql_query("SELECT * FROM prediction_logs", conn)
-        
-        if not backup_df.empty:
-            # Create backup folder if it doesn't exist
-            backup_folder = "backup"
-            if not os.path.exists(backup_folder):
-                os.makedirs(backup_folder)
-                print(f"[INFO] Created backup folder: {backup_folder}")
-            
-            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-            backup_filename = f"prediction_logs_backup_{timestamp}.csv"
-            backup_path = os.path.join(backup_folder, backup_filename)
-            
-            backup_df.to_csv(backup_path, index=False)
-            print(f"[INFO] Backup saved to {backup_path}")
+        # Create historical_logs table if it doesn't exist
+        c.execute('''CREATE TABLE IF NOT EXISTS historical_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            log_month TEXT,
+            anomaly INTEGER,
+            explanation TEXT,
+            network_packet_size INTEGER,
+            login_attempts INTEGER,
+            session_duration REAL,
+            ip_reputation_score REAL,
+            failed_logins INTEGER,
+            unusual_time_access INTEGER,
+            protocol_type_ICMP INTEGER,
+            protocol_type_TCP INTEGER,
+            protocol_type_UDP INTEGER,
+            encryption_used_AES INTEGER,
+            encryption_used_DES INTEGER,
+            browser_type_Chrome INTEGER,
+            browser_type_Edge INTEGER,
+            browser_type_Firefox INTEGER,
+            browser_type_Safari INTEGER,
+            browser_type_Unknown INTEGER,
+            risk_score REAL,
+            anomaly_score REAL,
+            profile_used TEXT,
+            user_role TEXT,
+            archived_at TEXT
+        )''')
 
-            # Separate data by month
-            current_month_data = backup_df[backup_df['log_month'] == current_month]
-            historical_data = backup_df[backup_df['log_month'] != current_month]
-            
-            print(f"[INFO] Current month ({current_month}) records: {len(current_month_data)}")
-            print(f"[INFO] Historical records to preserve: {len(historical_data)}")
+        # Read current month's data
+        current_data_df = pd.read_sql_query(
+            "SELECT * FROM prediction_logs WHERE log_month = ?", 
+            conn, 
+            params=(current_month,)
+        )
 
-        # Clear ALL data first
-        c.execute("DELETE FROM prediction_logs")
-        
-        # Recreate the table structure
-        c.execute("DROP TABLE IF EXISTS prediction_logs")
-        c.execute("""
-            CREATE TABLE prediction_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT,
-                log_month TEXT,
-                anomaly INTEGER,
-                explanation TEXT,
-                network_packet_size INTEGER,
-                login_attempts INTEGER,
-                session_duration REAL,
-                ip_reputation_score REAL,
-                failed_logins INTEGER,
-                unusual_time_access INTEGER,
-                protocol_type_ICMP INTEGER,
-                protocol_type_TCP INTEGER,
-                protocol_type_UDP INTEGER,
-                encryption_used_AES INTEGER,
-                encryption_used_DES INTEGER,
-                browser_type_Chrome INTEGER,
-                browser_type_Edge INTEGER,
-                browser_type_Firefox INTEGER,
-                browser_type_Safari INTEGER,
-                browser_type_Unknown INTEGER,
-                risk_score REAL,
-                anomaly_score REAL,
-                profile_used TEXT,
-                user_role TEXT
-            )
-        """)
-
-        # CRITICAL: Restore historical data (previous months) back to database
-        if not backup_df.empty and len(historical_data) > 0:
-            print(f"[INFO] Restoring {len(historical_data)} historical records...")
+        # Move current month's data to historical_logs
+        if not current_data_df.empty:
+            archived_at = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
             
-            for _, row in historical_data.iterrows():
+            for _, row in current_data_df.iterrows():
                 c.execute("""
-                    INSERT INTO prediction_logs 
-                    (timestamp, log_month, anomaly, explanation, network_packet_size, 
-                     login_attempts, session_duration, ip_reputation_score, failed_logins, 
+                    INSERT INTO historical_logs 
+                    (timestamp, log_month, anomaly, explanation, network_packet_size,
+                     login_attempts, session_duration, ip_reputation_score, failed_logins,
                      unusual_time_access, protocol_type_ICMP, protocol_type_TCP, protocol_type_UDP,
                      encryption_used_AES, encryption_used_DES, browser_type_Chrome, browser_type_Edge,
-                     browser_type_Firefox, browser_type_Safari, browser_type_Unknown, 
-                     risk_score, anomaly_score, profile_used, user_role)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     browser_type_Firefox, browser_type_Safari, browser_type_Unknown,
+                     risk_score, anomaly_score, profile_used, user_role, archived_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     row['timestamp'], row['log_month'], row['anomaly'], row['explanation'], 
                     row['network_packet_size'], row['login_attempts'], row['session_duration'],
@@ -171,24 +147,38 @@ def clear_predictions():
                     row['encryption_used_AES'], row['encryption_used_DES'], row['browser_type_Chrome'],
                     row['browser_type_Edge'], row['browser_type_Firefox'], row['browser_type_Safari'],
                     row['browser_type_Unknown'], row['risk_score'], row['anomaly_score'],
-                    row['profile_used'], row['user_role']
+                    row['profile_used'], row['user_role'], archived_at
                 ))
-            
-            print(f"[SUCCESS] Historical data preserved in Static Report")
 
+        # Create backup CSV
+        if not current_data_df.empty:
+            backup_folder = "backup"
+            if not os.path.exists(backup_folder):
+                os.makedirs(backup_folder)
+            
+            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            backup_filename = f"prediction_logs_backup_{timestamp}.csv"
+            backup_path = os.path.join(backup_folder, backup_filename)
+            current_data_df.to_csv(backup_path, index=False)
+            print(f"[INFO] Current data backed up to: {backup_path}")
+
+        # Now clear ONLY current month's data from prediction_logs
+        c.execute("DELETE FROM prediction_logs WHERE log_month = ?", (current_month,))
+        
+        # Keep historical data (previous months) in prediction_logs for Static Report
+        historical_count = c.execute("SELECT COUNT(*) FROM historical_logs").fetchone()[0]
+        
         conn.commit()
         conn.close()
 
-        # Regenerate summary to reflect the cleared state
+        # Regenerate summary
         from routes.dashboard import generate_summary_internal
         generate_summary_internal()
 
-        if len(historical_data) > 0:
-            flash(f"✅ Current month's prediction logs cleared. {len(historical_data)} historical records preserved for Static Report.", "success")
-        else:
-            flash("✅ Prediction logs have been cleared and backed up.", "success")
-            
-        print(f"[SUCCESS] Clear completed - Historical data preserved")
+        flash(f"✅ Current month's logs cleared. {len(current_data_df)} records moved to historical storage. "
+              f"Total historical records: {historical_count}", "success")
+        
+        print(f"[SUCCESS] Clear completed - {len(current_data_df)} records archived")
 
     except Exception as e:
         print(f"[ERROR] Clear predictions failed: {e}")

@@ -351,6 +351,35 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('ipReputationChart').innerHTML = '<div class="text-center text-danger p-3">Chart rendering failed</div>';
   }
 
+  // Add this code to your dashboard_v5.html JavaScript section
+// Right after the IP Reputation Chart code
+
+  // Session Duration Chart
+  try {
+    Plotly.newPlot('sessionDurationChart', [{
+      x: sessionDurations,
+      type: 'histogram',
+      nbinsx: 20, // Number of bins for the histogram
+      hovertemplate: 'Session Duration: %{x} seconds<br>Count: %{y}<extra></extra>',
+      marker: {
+        color: '#17a2b8', // Nice blue color
+        opacity: 0.7
+      }
+    }], {
+      title: 'Session Durations Distribution',
+      height: 300,
+      xaxis: { 
+        title: 'Session Duration (seconds)',
+        tickformat: '.0f'
+      },
+      yaxis: { title: 'Count' },
+      bargap: 0.1
+    }, { responsive: true });
+  } catch (error) {
+    console.error('[ERROR] Session duration chart failed:', error);
+    document.getElementById('sessionDurationChart').innerHTML = '<div class="text-center text-danger p-3">Chart rendering failed</div>';
+  }
+
   console.log('[DEBUG] All charts rendered successfully');
 });
 </script>
