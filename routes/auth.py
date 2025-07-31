@@ -23,6 +23,13 @@ def login():
         if result and check_password_hash(result[0], passwd):
             session['username'] = uname
             session['role'] = result[1]
+            # Get user ID and store it in session
+            conn = sqlite3.connect(DB_FILE)
+            c = conn.cursor()
+            c.execute("SELECT id FROM users WHERE username = ?", (uname,))
+            user_id = c.fetchone()[0]
+            session['user_id'] = user_id
+            conn.close()
             flash("✅ Login successful.", "success")
             return redirect(url_for('dashboard.dashboard'))
         else:
