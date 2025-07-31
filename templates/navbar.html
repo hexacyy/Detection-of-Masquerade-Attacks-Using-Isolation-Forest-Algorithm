@@ -1,3 +1,4 @@
+<!-- templates/navbar.html - FIXED VERSION -->
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
   <div class="container-fluid">
     <a class="navbar-brand" href="/dashboard">Masquerade Prototype</a>
@@ -44,7 +45,11 @@
           </a>
           <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="navbarDropdown">
             <li>
-              <a class="dropdown-item" href="{{ url_for('auth.logout') }}">Logout</a>
+              <a class="dropdown-item" href="{{ url_for('user.change_password') }}">🔐 Change Password</a>
+            </li>
+            <li><hr class="dropdown-divider"></li>
+            <li>
+              <a class="dropdown-item" href="{{ url_for('auth.logout') }}">🚪 Logout</a>
             </li>
           </ul>
         </li>

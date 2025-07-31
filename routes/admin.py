@@ -8,8 +8,50 @@ from datetime import datetime, timezone, timedelta
 from utils import login_required, is_strong_password, get_monthly_db_path
 from config import DB_FILE
 from routes.dashboard import generate_summary_internal
+import secrets
+import string
+from datetime import datetime, timedelta
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
+
+def log_security_event(user_id, username, action, details, success=True, ip_address=None):
+    """Log security events to audit table"""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""INSERT INTO security_audit_log 
+                     (user_id, username, action, details, success, ip_address, timestamp)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                 (user_id, username, action, details, int(success), 
+                  ip_address or request.remote_addr, datetime.now().isoformat()))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[ERROR] Failed to log security event: {e}")
+
+def generate_secure_temp_password(length=16):
+    """Generate a secure temporary password"""
+    alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+    
+    # Ensure at least one character from each category
+    categories = [
+        string.ascii_lowercase,
+        string.ascii_uppercase, 
+        string.digits,
+        "!@#$%^&*"
+    ]
+    
+    password = []
+    for category in categories:
+        password.append(secrets.choice(category))
+    
+    # Fill the rest randomly
+    for _ in range(length - len(categories)):
+        password.append(secrets.choice(alphabet))
+    
+    # Shuffle the password
+    secrets.SystemRandom().shuffle(password)
+    return ''.join(password)
 
 @admin_bp.route('/manage_users', methods=['GET', 'POST'])
 @login_required(role='admin')
@@ -56,24 +98,70 @@ def delete_user(user_id):
     return redirect(url_for('admin.manage_users'))
 
 
+# Add this debug version to your routes/admin.py
+# REPLACE your existing reset_password function with this one:
+
 @admin_bp.route('/reset_password/<int:user_id>', methods=['POST'])
 @login_required(role='admin')
 def reset_password(user_id):
-    print(f"[ROUTE] DELETE user {user_id}")
-    new_password = request.form['new_password']
-    if not new_password or not is_strong_password(new_password):
-        flash("❌ Password must be at least 12 characters and include uppercase, lowercase, numbers, and symbols.", "danger")
-        return redirect(url_for('admin.manage_users'))
+    """Debug version - Enhanced admin password reset with temporary passwords"""
+    print(f"[DEBUG] Enhanced reset_password called for user_id: {user_id}")
+    
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute("UPDATE users SET password_hash = ? WHERE id = ?", (
-        generate_password_hash(new_password), user_id))
-    conn.commit()
+    
+    # Get user info
+    c.execute("SELECT username FROM users WHERE id = ?", (user_id,))
+    user = c.fetchone()
+    
+    if not user:
+        flash("❌ User not found.", "danger")
+        conn.close()
+        return redirect(url_for('admin.manage_users'))
+    
+    username = user[0]
+    admin_username = session.get('username', 'unknown')
+    
+    # Generate secure temporary password - SIMPLE VERSION for debugging
+    import secrets
+    import string
+    temp_password = ''.join(secrets.choice(string.ascii_letters + string.digits + '!@#$') for _ in range(12))
+    print(f"[DEBUG] Generated temp password: {temp_password}")
+    
+    # Set temporary password with 24-hour expiration
+    from datetime import datetime, timedelta
+    expires_at = (datetime.now() + timedelta(hours=24)).isoformat()
+    current_time = datetime.now().isoformat()
+    
+    try:
+        c.execute("""UPDATE users SET 
+                     password_hash = ?, 
+                     must_change_password = 1,
+                     temp_password_expires = ?,
+                     password_changed_at = ?
+                     WHERE id = ?""", 
+                 (generate_password_hash(temp_password), expires_at, current_time, user_id))
+        conn.commit()
+        print(f"[DEBUG] Database updated successfully")
+    except Exception as e:
+        print(f"[DEBUG] Database error: {e}")
+        flash(f"❌ Database error: {e}", "danger")
+        conn.close()
+        return redirect(url_for('admin.manage_users'))
+    
     conn.close()
-    flash("✅ Password reset successfully.", "info")
-    return redirect(url_for('admin.manage_users'))
-
-# Replace your clear_predictions function in routes/admin.py
+    
+    # Simple security logging
+    print(f"[SECURITY] Admin {admin_username} reset password for user {username}")
+    
+    flash(f"✅ Temporary password generated for {username}. User must change it within 24 hours.", "success")
+    
+    # Return the temporary password for secure display
+    print(f"[DEBUG] Rendering template with temp_password: {temp_password}")
+    return render_template("password_reset_result.html", 
+                         username=username, 
+                         temp_password=temp_password,
+                         expires_in_hours=24)
 
 @admin_bp.route('/clear_predictions', methods=['POST'])
 @login_required(role='admin')
