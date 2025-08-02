@@ -1,7 +1,10 @@
 from flask import Flask, request, jsonify, redirect, url_for, session
 from dotenv import load_dotenv
 import os
+import sqlite3  # ADD THIS MISSING IMPORT
+from datetime import datetime  # ADD THIS MISSING IMPORT
 from logging_config import setup_logging
+
 
 # Load environment variables and setup logging
 load_dotenv("webhook.env")

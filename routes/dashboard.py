@@ -55,6 +55,104 @@ def clean_dataframe_for_json(df):
     # Convert to records (list of dictionaries)
     return df_clean.to_dict(orient='records')
 
+# Add this missing function to your routes/dashboard.py file
+# Place it after the clean_dataframe_for_json function
+
+def generate_summary_internal(selected_month=None):
+    """Generate internal summary data for dashboard"""
+    
+    # Default summary structure
+    summary = {
+        'total': 0,
+        'anomalies': 0,
+        'normal': 0,
+        'anomaly_rate': 0.0,
+        'last_updated': 'N/A',
+        'df_tail': [],
+        'timestamps': [],
+        'anomaly_flags': [],
+        'available_months': []
+    }
+    
+    try:
+        db_path = get_monthly_db_path()
+        print(f"[DEBUG] Accessing database: {db_path}")
+        
+        if not os.path.exists(db_path):
+            print(f"[WARNING] Database {db_path} does not exist")
+            return summary
+            
+        with sqlite3.connect(db_path) as conn:
+            # Check if prediction_logs table exists
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='prediction_logs'")
+            if not cursor.fetchone():
+                print("[ERROR] prediction_logs table does not exist!")
+                # Try to create the table
+                from utils import create_monthly_database
+                current_month = datetime.now().strftime('%Y%m')
+                create_monthly_database(db_path, current_month)
+                return summary
+            
+            # Base query - always use prediction_logs, not a non-existent table
+            if selected_month:
+                query = "SELECT * FROM prediction_logs WHERE log_month = ? ORDER BY timestamp DESC"
+                params = (selected_month,)
+                print(f"[DEBUG] Querying specific month: {selected_month}")
+            else:
+                query = "SELECT * FROM prediction_logs ORDER BY timestamp DESC"
+                params = None
+                print(f"[DEBUG] Querying all data")
+                
+            print(f"[DEBUG] Executing query: {query}")
+            
+            # Execute the query safely
+            if params:
+                df = pd.read_sql_query(query, conn, params=params)
+            else:
+                df = pd.read_sql_query(query, conn)
+                
+            print(f"[DEBUG] Query returned {len(df)} records")
+            
+            if not df.empty:
+                # Calculate summary statistics
+                summary['total'] = len(df)
+                summary['anomalies'] = int(df['anomaly'].sum()) if 'anomaly' in df.columns else 0
+                summary['normal'] = summary['total'] - summary['anomalies']
+                summary['anomaly_rate'] = (summary['anomalies'] / summary['total'] * 100) if summary['total'] > 0 else 0
+                
+                # Handle timestamps
+                if 'timestamp' in df.columns:
+                    df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+                    valid_timestamps = df['timestamp'].dropna()
+                    if not valid_timestamps.empty:
+                        summary['last_updated'] = valid_timestamps.max().strftime('%Y-%m-%d %H:%M:%S')
+                        summary['timestamps'] = valid_timestamps.dt.strftime('%Y-%m-%d %H:%M:%S').tolist()
+                
+                # Get recent records for display
+                recent_df = df.head(100)
+                summary['df_tail'] = clean_dataframe_for_json(recent_df)
+                
+                # Anomaly flags for charts
+                summary['anomaly_flags'] = df['anomaly'].tolist() if 'anomaly' in df.columns else []
+                
+            # Get available months
+            try:
+                available_months_query = "SELECT DISTINCT log_month FROM prediction_logs ORDER BY log_month DESC"
+                available_months = [row[0] for row in conn.execute(available_months_query).fetchall()]
+                summary['available_months'] = available_months
+            except Exception as e:
+                print(f"[WARNING] Could not get available months: {e}")
+                summary['available_months'] = []
+                
+        print(f"[DEBUG] Summary generated: {summary['total']} total, {summary['anomalies']} anomalies")
+        return summary
+        
+    except Exception as e:
+        print(f"[ERROR] Summary generation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return summary
 
 @dashboard_bp.route('/dashboard')
 @login_required()

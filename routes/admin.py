@@ -1,4 +1,4 @@
-from flask import Blueprint, render_template, request, redirect, url_for, flash, send_file, session
+from flask import Blueprint, render_template, request, redirect, url_for, flash, send_file, session, jsonify
 from werkzeug.security import generate_password_hash
 import pandas as pd
 import sqlite3
@@ -52,6 +52,17 @@ def generate_secure_temp_password(length=16):
     # Shuffle the password
     secrets.SystemRandom().shuffle(password)
     return ''.join(password)
+
+def get_generate_summary_function():
+    """Get the summary function safely to avoid circular imports"""
+    try:
+        from routes.dashboard import generate_summary_internal
+        return generate_summary_internal
+    except ImportError:
+        # Fallback function if import fails
+        def fallback_summary():
+            return {"error": "Summary function not available", "total_sessions": 0}
+        return fallback_summary
 
 @admin_bp.route('/manage_users', methods=['GET', 'POST'])
 @login_required(role='admin')

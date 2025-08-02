@@ -97,42 +97,27 @@ def create_monthly_database(db_path, month):
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''')
         
-        # Insert a welcome record to indicate the database is ready
-        welcome_record = {
-            'timestamp': datetime.now(timezone.utc).isoformat(),
-            'log_month': month[:4] + '-' + month[4:],  # Convert 202508 to 2025-08
-            'anomaly': 0,
-            'explanation': f'✅ New monthly database created for {month[:4]}-{month[4:]}',
-            'network_packet_size': 0,
-            'login_attempts': 0,
-            'session_duration': 0,
-            'ip_reputation_score': 0.0,
-            'failed_logins': 0,
-            'unusual_time_access': 0,
-            'protocol_type_ICMP': 0,
-            'protocol_type_TCP': 1,
-            'protocol_type_UDP': 0,
-            'encryption_used_AES': 1,
-            'encryption_used_DES': 0,
-            'browser_type_Chrome': 1,
-            'browser_type_Edge': 0,
-            'browser_type_Firefox': 0,
-            'browser_type_Safari': 0,
-            'browser_type_Unknown': 0,
-            'risk_score': 0.0,
-            'anomaly_score': 0.0,
-            'profile_used': 'System-Init',
-            'user_role': 'System',
-            'confidence': 'INFO',
-            'method_used': 'Database Initialization',
-            'baseline_used': 1
-        }
-        
-        # Insert the welcome record
-        columns = ', '.join(welcome_record.keys())
-        placeholders = ', '.join('?' for _ in welcome_record)
-        cursor.execute(f"INSERT INTO prediction_logs ({columns}) VALUES ({placeholders})", 
-                      tuple(welcome_record.values()))
+        # Insert a welcome record
+        cursor.execute('''
+            INSERT INTO prediction_logs 
+            (timestamp, log_month, anomaly, explanation, network_packet_size, login_attempts,
+             session_duration, ip_reputation_score, failed_logins, unusual_time_access,
+             protocol_type_ICMP, protocol_type_TCP, protocol_type_UDP, encryption_used_AES,
+             encryption_used_DES, browser_type_Chrome, browser_type_Edge, browser_type_Firefox,
+             browser_type_Safari, browser_type_Unknown, risk_score, anomaly_score,
+             profile_used, user_role, confidence, method_used, baseline_used)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            datetime.now(timezone.utc).isoformat(),
+            month[:4] + '-' + month[4:],
+            0,
+            f'✅ New monthly database created for {month[:4]}-{month[4:]}',
+            0, 0, 0, 0.0, 0, 0,  # Basic session data
+            0, 1, 0, 1, 0,  # Protocol and encryption defaults
+            1, 0, 0, 0, 0,  # Browser defaults
+            0.0, 0.0,  # Risk and anomaly scores
+            'System-Init', 'System', 'INFO', 'Database Initialization', 1
+        ))
         
         conn.commit()
         conn.close()
@@ -141,19 +126,6 @@ def create_monthly_database(db_path, month):
         
     except Exception as e:
         print(f"[AUTO-CREATE] ❌ Failed to create {db_path}: {e}")
-        # Create a minimal fallback
-        try:
-            conn = sqlite3.connect(db_path)
-            cursor = conn.cursor()
-            cursor.execute("CREATE TABLE prediction_logs (id INTEGER PRIMARY KEY)")
-            conn.commit()
-            conn.close()
-            print(f"[AUTO-CREATE] ⚠️ Created minimal fallback database")
-        except:
-            print(f"[AUTO-CREATE] ❌ Critical: Could not create any database")
-
-# ALSO ADD this enhanced function to handle database queries safely:
-
 def safe_database_query(query, params=None, db_path=None):
     """Execute database query with automatic database creation if needed"""
     if db_path is None:
