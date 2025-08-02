@@ -10,6 +10,9 @@ setup_logging()
 def ensure_current_database():
     """Ensure current month database exists on startup"""
     try:
+        # Import here to avoid circular imports
+        from utils import get_monthly_db_path
+        
         db_path = get_monthly_db_path()
         print(f"[STARTUP] Current database: {db_path}")
         
@@ -23,7 +26,52 @@ def ensure_current_database():
     except Exception as e:
         print(f"[STARTUP] ⚠️ Database issue detected: {e}")
         print(f"[STARTUP] 🔧 Auto-fixing...")
-        # The get_monthly_db_path() call will fix it automatically
+        # Try to create manually if import fails
+        try:
+            import sqlite3
+            from datetime import datetime, timezone
+            
+            current_month = datetime.now(timezone.utc).strftime('%Y%m')
+            db_path = f"prediction_logs_{current_month}.db"
+            
+            if not os.path.exists(db_path):
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+                cursor.execute('''CREATE TABLE prediction_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT,
+                    log_month TEXT,
+                    anomaly INTEGER,
+                    explanation TEXT,
+                    network_packet_size REAL,
+                    login_attempts INTEGER,
+                    session_duration REAL,
+                    ip_reputation_score REAL,
+                    failed_logins INTEGER,
+                    unusual_time_access INTEGER,
+                    protocol_type_ICMP INTEGER DEFAULT 0,
+                    protocol_type_TCP INTEGER DEFAULT 1,
+                    protocol_type_UDP INTEGER DEFAULT 0,
+                    encryption_used_AES INTEGER DEFAULT 1,
+                    encryption_used_DES INTEGER DEFAULT 0,
+                    browser_type_Chrome INTEGER DEFAULT 0,
+                    browser_type_Edge INTEGER DEFAULT 0,
+                    browser_type_Firefox INTEGER DEFAULT 0,
+                    browser_type_Safari INTEGER DEFAULT 0,
+                    browser_type_Unknown INTEGER DEFAULT 0,
+                    risk_score REAL,
+                    anomaly_score REAL,
+                    profile_used TEXT,
+                    user_role TEXT,
+                    confidence TEXT,
+                    method_used TEXT,
+                    baseline_used INTEGER DEFAULT 1
+                )''')
+                conn.commit()
+                conn.close()
+                print(f"[STARTUP] ✅ Emergency database created: {db_path}")
+        except Exception as emergency_e:
+            print(f"[STARTUP] ❌ Emergency fix failed: {emergency_e}")
 
 def create_app():
     app = Flask(__name__)
@@ -84,10 +132,14 @@ def create_app():
     return app
 
 if __name__ == '__main__':
+    import sqlite3  # Add this import
+    
     # Ensure database is ready before starting
     ensure_current_database()
     
     app = create_app()
+    
+    # Development server configuration
     debug_mode = os.environ.get('FLASK_DEBUG', 'True').lower() == 'true'
     port = int(os.environ.get('PORT', 5000))
     host = os.environ.get('HOST', '127.0.0.1')
