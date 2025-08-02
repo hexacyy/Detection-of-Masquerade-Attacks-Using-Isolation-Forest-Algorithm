@@ -7,6 +7,24 @@ from logging_config import setup_logging
 load_dotenv("webhook.env")
 setup_logging()
 
+def ensure_current_database():
+    """Ensure current month database exists on startup"""
+    try:
+        db_path = get_monthly_db_path()
+        print(f"[STARTUP] Current database: {db_path}")
+        
+        # Test a simple query to make sure table exists
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM prediction_logs")
+            count = cursor.fetchone()[0]
+            print(f"[STARTUP] ✅ Database ready with {count} records")
+            
+    except Exception as e:
+        print(f"[STARTUP] ⚠️ Database issue detected: {e}")
+        print(f"[STARTUP] 🔧 Auto-fixing...")
+        # The get_monthly_db_path() call will fix it automatically
+
 def create_app():
     app = Flask(__name__)
     app.secret_key = os.environ["SECRET_KEY"]
@@ -66,9 +84,10 @@ def create_app():
     return app
 
 if __name__ == '__main__':
-    app = create_app()
+    # Ensure database is ready before starting
+    ensure_current_database()
     
-    # Development server configuration
+    app = create_app()
     debug_mode = os.environ.get('FLASK_DEBUG', 'True').lower() == 'true'
     port = int(os.environ.get('PORT', 5000))
     host = os.environ.get('HOST', '127.0.0.1')

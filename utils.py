@@ -46,8 +46,140 @@ def require_api_key(f):
     return decorated
 
 def get_monthly_db_path():
+    """Get monthly database path with automatic creation"""
     now = datetime.now(timezone.utc)
-    return f"prediction_logs_{now.strftime('%Y%m')}.db"
+    current_month = now.strftime('%Y%m')
+    db_path = f"prediction_logs_{current_month}.db"
+    
+    # Auto-create database if it doesn't exist
+    if not os.path.exists(db_path):
+        print(f"[AUTO-CREATE] Creating new monthly database: {db_path}")
+        create_monthly_database(db_path, current_month)
+    
+    return db_path
+
+def create_monthly_database(db_path, month):
+    """Automatically create a new monthly database with proper schema"""
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Create prediction_logs table with the working schema
+        cursor.execute('''CREATE TABLE IF NOT EXISTS prediction_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            log_month TEXT,
+            anomaly INTEGER,
+            explanation TEXT,
+            network_packet_size REAL,
+            login_attempts INTEGER,
+            session_duration REAL,
+            ip_reputation_score REAL,
+            failed_logins INTEGER,
+            unusual_time_access INTEGER,
+            protocol_type_ICMP INTEGER DEFAULT 0,
+            protocol_type_TCP INTEGER DEFAULT 1,
+            protocol_type_UDP INTEGER DEFAULT 0,
+            encryption_used_AES INTEGER DEFAULT 1,
+            encryption_used_DES INTEGER DEFAULT 0,
+            browser_type_Chrome INTEGER DEFAULT 0,
+            browser_type_Edge INTEGER DEFAULT 0,
+            browser_type_Firefox INTEGER DEFAULT 0,
+            browser_type_Safari INTEGER DEFAULT 0,
+            browser_type_Unknown INTEGER DEFAULT 0,
+            risk_score REAL,
+            anomaly_score REAL,
+            profile_used TEXT,
+            user_role TEXT,
+            confidence TEXT,
+            method_used TEXT,
+            baseline_used INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )''')
+        
+        # Insert a welcome record to indicate the database is ready
+        welcome_record = {
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'log_month': month[:4] + '-' + month[4:],  # Convert 202508 to 2025-08
+            'anomaly': 0,
+            'explanation': f'✅ New monthly database created for {month[:4]}-{month[4:]}',
+            'network_packet_size': 0,
+            'login_attempts': 0,
+            'session_duration': 0,
+            'ip_reputation_score': 0.0,
+            'failed_logins': 0,
+            'unusual_time_access': 0,
+            'protocol_type_ICMP': 0,
+            'protocol_type_TCP': 1,
+            'protocol_type_UDP': 0,
+            'encryption_used_AES': 1,
+            'encryption_used_DES': 0,
+            'browser_type_Chrome': 1,
+            'browser_type_Edge': 0,
+            'browser_type_Firefox': 0,
+            'browser_type_Safari': 0,
+            'browser_type_Unknown': 0,
+            'risk_score': 0.0,
+            'anomaly_score': 0.0,
+            'profile_used': 'System-Init',
+            'user_role': 'System',
+            'confidence': 'INFO',
+            'method_used': 'Database Initialization',
+            'baseline_used': 1
+        }
+        
+        # Insert the welcome record
+        columns = ', '.join(welcome_record.keys())
+        placeholders = ', '.join('?' for _ in welcome_record)
+        cursor.execute(f"INSERT INTO prediction_logs ({columns}) VALUES ({placeholders})", 
+                      tuple(welcome_record.values()))
+        
+        conn.commit()
+        conn.close()
+        
+        print(f"[AUTO-CREATE] ✅ Successfully created {db_path} with proper schema")
+        
+    except Exception as e:
+        print(f"[AUTO-CREATE] ❌ Failed to create {db_path}: {e}")
+        # Create a minimal fallback
+        try:
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute("CREATE TABLE prediction_logs (id INTEGER PRIMARY KEY)")
+            conn.commit()
+            conn.close()
+            print(f"[AUTO-CREATE] ⚠️ Created minimal fallback database")
+        except:
+            print(f"[AUTO-CREATE] ❌ Critical: Could not create any database")
+
+# ALSO ADD this enhanced function to handle database queries safely:
+
+def safe_database_query(query, params=None, db_path=None):
+    """Execute database query with automatic database creation if needed"""
+    if db_path is None:
+        db_path = get_monthly_db_path()  # This will auto-create if needed
+    
+    try:
+        with sqlite3.connect(db_path) as conn:
+            if params:
+                return pd.read_sql_query(query, conn, params=params)
+            else:
+                return pd.read_sql_query(query, conn)
+    except sqlite3.OperationalError as e:
+        if "no such table" in str(e):
+            print(f"[AUTO-FIX] Table missing in {db_path}, recreating...")
+            # Force recreation of the database
+            if os.path.exists(db_path):
+                os.remove(db_path)
+            create_monthly_database(db_path, datetime.now().strftime('%Y%m'))
+            # Retry the query
+            with sqlite3.connect(db_path) as conn:
+                if params:
+                    return pd.read_sql_query(query, conn, params=params)
+                else:
+                    return pd.read_sql_query(query, conn)
+        else:
+            raise e
 
 def send_telegram_alert(session_data):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID or not TELEGRAM_GROUPCHAT_ID:

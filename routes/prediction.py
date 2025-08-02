@@ -1,13 +1,16 @@
+# ADD these at the very top of routes/prediction.py
 from flask import Blueprint, request, jsonify, render_template, current_app
 import pandas as pd
 import sqlite3
 import json
 import os
+import requests  # This was missing!
 from datetime import datetime, timezone
 from random import gauss, uniform, choice
 import numpy as np
-from config import model, scaler, expected_columns, baseline_stats
-from utils import require_api_key, login_required, get_monthly_db_path, send_telegram_alert
+from config import (model, scaler, expected_columns, baseline_stats, 
+                   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_GROUPCHAT_ID)
+from utils import require_api_key, login_required, get_monthly_db_path
 
 prediction_bp = Blueprint('prediction', __name__)
 
@@ -25,6 +28,89 @@ SIMPLE_BASELINE = {
         "warning_thresholds": {"failed_logins": 3, "ip_reputation": 0.70, "login_attempts": 7, "session_duration": 4000}
     }
 }
+
+def send_simple_telegram_alert(message):
+    """Send a telegram alert - handles long messages with JSON"""
+    try:
+        from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_GROUPCHAT_ID
+        import requests
+        
+        if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+            print("[ALERT ERROR] Missing Telegram configuration")
+            return False
+        
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        
+        # Check message length (Telegram has a 4096 character limit)
+        if len(message) > 4000:
+            # Split into two messages if too long
+            split_point = message.find('📄 *Technical Details:*')
+            if split_point > 0:
+                # Send summary first
+                summary_msg = message[:split_point].strip()
+                technical_msg = message[split_point:].strip()
+                
+                # Send summary
+                send_single_message(url, TELEGRAM_CHAT_ID, summary_msg)
+                if TELEGRAM_GROUPCHAT_ID:
+                    send_single_message(url, TELEGRAM_GROUPCHAT_ID, summary_msg)
+                
+                # Send technical details
+                send_single_message(url, TELEGRAM_CHAT_ID, technical_msg)
+                if TELEGRAM_GROUPCHAT_ID:
+                    send_single_message(url, TELEGRAM_GROUPCHAT_ID, technical_msg)
+                
+                print("[ALERT] ✅ Long message sent in 2 parts")
+                return True
+        
+        # Send as single message if not too long
+        success_count = 0
+        
+        # Send to personal chat
+        if send_single_message(url, TELEGRAM_CHAT_ID, message):
+            success_count += 1
+        
+        # Send to group chat
+        if TELEGRAM_GROUPCHAT_ID and send_single_message(url, TELEGRAM_GROUPCHAT_ID, message):
+            success_count += 1
+        
+        if success_count > 0:
+            print(f"[ALERT] 🎉 Successfully sent Telegram alert to {success_count} chat(s)")
+            return True
+        else:
+            print("[ALERT ERROR] ❌ Failed to send any Telegram alerts")
+            return False
+            
+    except Exception as e:
+        print(f"[ALERT ERROR] ❌ Telegram alert system error: {e}")
+        return False
+
+def send_single_message(url, chat_id, message):
+    """Helper function to send a single message"""
+    try:
+        payload = {
+            "chat_id": chat_id,
+            "text": message,
+            "parse_mode": "Markdown"
+        }
+        
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            print(f"[ALERT] ✅ Message sent to chat {chat_id}")
+            return True
+        else:
+            print(f"[ALERT ERROR] Failed to send to {chat_id} - Status {response.status_code}: {response.text}")
+            return False
+    except Exception as e:
+        print(f"[ALERT ERROR] Exception sending to {chat_id}: {e}")
+        return False
+
+# OPTIONAL: Test function to verify Telegram is working
+def test_telegram_alert():
+    """Test function to check if Telegram alerts work"""
+    test_message = f"🧪 *Test Alert*\n\nTesting Telegram integration at `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`"
+    result = send_simple_telegram_alert(test_message)
+    return result
 
 def detect_masquerade_with_baseline(session_data):
     """Actual baseline detection that gets used"""
@@ -371,7 +457,7 @@ def predict():
     else:
         method_used = "Baseline + ML (Normal)"
     
-    # 4. DATABASE LOGGING - FIXED to match working schema
+    # 4. CLEAN DATABASE LOGGING - NO input_data column
     try:
         db_path = get_monthly_db_path()
         with sqlite3.connect(db_path) as conn:
@@ -393,16 +479,16 @@ def predict():
             encryption_aes = data.get('encryption_used_AES', 1)  # Default to AES
             encryption_des = data.get('encryption_used_DES', 0)
             
-            # INSERT using the WORKING schema column order
+            # CLEAN INSERT - NO input_data column (it's redundant!)
             cursor.execute('''
                 INSERT INTO prediction_logs 
                 (timestamp, log_month, anomaly, explanation, network_packet_size, 
-                 login_attempts, session_duration, ip_reputation_score, failed_logins, 
-                 unusual_time_access, protocol_type_ICMP, protocol_type_TCP, protocol_type_UDP,
-                 encryption_used_AES, encryption_used_DES, browser_type_Chrome, browser_type_Edge,
-                 browser_type_Firefox, browser_type_Safari, browser_type_Unknown, risk_score,
-                 anomaly_score, profile_used, user_role, input_data, confidence, method_used, baseline_used)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                login_attempts, session_duration, ip_reputation_score, failed_logins, 
+                unusual_time_access, protocol_type_ICMP, protocol_type_TCP, protocol_type_UDP,
+                encryption_used_AES, encryption_used_DES, browser_type_Chrome, browser_type_Edge,
+                browser_type_Firefox, browser_type_Safari, browser_type_Unknown, risk_score,
+                anomaly_score, profile_used, user_role, confidence, method_used, baseline_used)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 datetime.now(timezone.utc).isoformat(),
                 datetime.now().strftime('%Y-%m'),  # Format like "2025-07"
@@ -428,35 +514,96 @@ def predict():
                 float(anomaly_score),
                 data.get('profile_used', 'Unknown-Medium'),
                 data.get('user_role', 'Unknown'),
-                json.dumps(data),  # Store original input
                 final_confidence,
                 method_used,
                 1  # baseline_used
+                # REMOVED: input_data - it was just JSON of the same data!
             ))
             
             conn.commit()
-            print(f"[SUCCESS] Database logging completed with working schema")
+            print(f"[SUCCESS] Clean database logging completed (no redundant input_data)")
             
     except Exception as e:
         print(f"[ERROR] Database logging failed: {e}")
         import traceback
         traceback.print_exc()
     
-    # 5. TELEGRAM ALERT - Fixed
+
+    # 5. ENHANCED TELEGRAM ALERT - Clean format + JSON dump
     if final_anomaly_flag and final_confidence in ['HIGH', 'MEDIUM']:
         try:
-            alert_msg = f"🚨 MASQUERADE ATTACK DETECTED!\n\n"
-            alert_msg += f"Confidence: {final_confidence}\n"
-            alert_msg += f"Method: {method_used}\n"
-            alert_msg += f"Failed Logins: {data.get('failed_logins', 0)}\n"
-            alert_msg += f"IP Reputation: {data.get('ip_reputation_score', 0):.2f}\n"
-            alert_msg += f"User Role: {data.get('user_role', 'Unknown')}\n"
+            # Create the clean, professional alert message (like Image 1)
+            alert_msg = f"🚨 *MASQUERADE ATTACK DETECTED!*\n\n"
+            alert_msg += f"🎯 *Confidence:* `{final_confidence}`\n"
+            alert_msg += f"🔍 *Detection Method:* `{method_used}`\n"
+            alert_msg += f"👤 *User Role:* `{data.get('user_role', 'Unknown')}`\n"
+            alert_msg += f"🌐 *Source IP:* `{data.get('source_ip', 'Unknown')}`\n\n"
             
-            send_telegram_alert(alert_msg)
-            print(f"[SUCCESS] Telegram alert sent for {final_confidence} confidence detection")
+            alert_msg += f"🔑 *Security Indicators:*\n"
+            alert_msg += f"• Failed Logins: `{data.get('failed_logins', 0)}`\n"
+            alert_msg += f"• IP Reputation: `{data.get('ip_reputation_score', 0):.2f}`\n"
+            alert_msg += f"• Login Attempts: `{data.get('login_attempts', 1)}`\n"
+            alert_msg += f"• Unusual Time: `{'Yes' if data.get('unusual_time_access', 0) else 'No'}`\n\n"
+            
+            alert_msg += f"⚡ *ML Analysis:*\n"
+            alert_msg += f"• Anomaly Score: `{anomaly_score:.3f}`\n"
+            alert_msg += f"• Risk Score: `{float(input_df['risk_score'].iloc[0]) if not input_df.empty else 0.0:.2f}`\n\n"
+            
+            alert_msg += f"🕐 *Timestamp:* `{datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}`\n\n"
+            
+            # Add the JSON dump (like Image 2) for technical details
+            alert_msg += f"📄 *Technical Details:*\n"
+            
+            # Create a comprehensive data dump including all relevant information
+            technical_data = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "log_month": datetime.now().strftime('%Y-%m'),
+                "anomaly": final_anomaly_flag,
+                "anomaly_score": round(float(anomaly_score), 4),
+                "explanation": final_explanation,
+                "profile_used": data.get('profile_used', 'Unknown-Medium'),
+                "user_role": data.get('user_role', 'Unknown'),
+                "confidence": final_confidence,
+                "business_impact": f"⚠️ HIGH: User account breach - investigate immediately" if final_confidence == 'HIGH' else f"⚠️ MEDIUM: Suspicious activity detected",
+                "estimated_cost": 15000,
+                "rule_based_detection": int(baseline_result['anomaly']),
+                "ml_detection": ml_anomaly_flag,
+                "risk_score": float(input_df['risk_score'].iloc[0]) if not input_df.empty else 0.0,
+                "detection_method": method_used,
+                "network_packet_size": data.get('network_packet_size', 0),
+                "login_attempts": data.get('login_attempts', 1),
+                "session_duration": data.get('session_duration', 0),
+                "ip_reputation_score": data.get('ip_reputation_score', 0.0),
+                "failed_logins": data.get('failed_logins', 0),
+                "unusual_time_access": data.get('unusual_time_access', 0),
+                "protocol_type_ICMP": data.get('protocol_type_ICMP', 0),
+                "protocol_type_TCP": data.get('protocol_type_TCP', 1),
+                "protocol_type_UDP": data.get('protocol_type_UDP', 0),
+                "encryption_used_AES": data.get('encryption_used_AES', 1),
+                "encryption_used_DES": data.get('encryption_used_DES', 0),
+                "browser_type_Chrome": data.get('browser_type_Chrome', 0),
+                "browser_type_Edge": data.get('browser_type_Edge', 0),
+                "browser_type_Firefox": data.get('browser_type_Firefox', 0),
+                "browser_type_Safari": data.get('browser_type_Safari', 0),
+                "browser_type_Unknown": data.get('browser_type_Unknown', 0)
+            }
+            
+            # Add the JSON dump in a code block (like Image 2)
+            json_dump = json.dumps(technical_data, indent=2)
+            alert_msg += f"```json\n{json_dump}\n```"
+            
+            # Send the enhanced alert
+            alert_sent = send_simple_telegram_alert(alert_msg)
+            
+            if alert_sent:
+                print(f"[SUCCESS] ✅ Enhanced Telegram alert sent for {final_confidence} confidence detection")
+            else:
+                print(f"[WARNING] ⚠️ Telegram alert failed to send")
             
         except Exception as e:
-            print(f"[ERROR] Telegram alert failed: {e}")
+            print(f"[ERROR] ❌ Telegram alert creation failed: {e}")
+            import traceback
+            traceback.print_exc()
     
     # 6. RESPONSE - Same format as before
     result = {
@@ -1010,3 +1157,28 @@ def test_baseline():
             "high_confidence_detections": sum(1 for r in results if r["baseline_result"]["confidence_level"] == "HIGH")
         }
     })
+
+# Add this route to test Telegram (add to your routes)
+@prediction_bp.route('/test-telegram')
+def test_telegram():
+    """Test endpoint to verify Telegram is working"""
+    try:
+        result = test_telegram_alert()
+        if result:
+            return jsonify({
+                "status": "success",
+                "message": "✅ Telegram alert sent successfully!",
+                "timestamp": datetime.now().isoformat()
+            })
+        else:
+            return jsonify({
+                "status": "error", 
+                "message": "❌ Failed to send Telegram alert",
+                "timestamp": datetime.now().isoformat()
+            }), 500
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"❌ Telegram test failed: {str(e)}",
+            "timestamp": datetime.now().isoformat()
+        }), 500
