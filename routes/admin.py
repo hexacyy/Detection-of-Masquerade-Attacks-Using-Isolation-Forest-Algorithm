@@ -4,13 +4,13 @@ import pandas as pd
 import sqlite3
 import os
 import csv
+import json  # ADD THIS MISSING IMPORT
 from datetime import datetime, timezone, timedelta
 from utils import login_required, is_strong_password, get_monthly_db_path
 from config import DB_FILE
 from routes.dashboard import generate_summary_internal
 import secrets
 import string
-from datetime import datetime, timedelta
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
 
