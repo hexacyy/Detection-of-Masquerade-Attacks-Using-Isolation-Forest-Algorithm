@@ -177,15 +177,25 @@ def reset_password(user_id):
 @admin_bp.route('/clear_predictions', methods=['POST'])
 @login_required(role='admin')
 def clear_predictions():
+    """Enhanced clear function that can clear all data or specific months"""
     try:
         db_path = get_monthly_db_path()
-        print(f"[DEBUG] Clearing current data from: {db_path}")
+        print(f"[DEBUG] Clearing data from: {db_path}")
 
         conn = sqlite3.connect(db_path)
         c = conn.cursor()
 
-        # Get current month
+        # Get current month for reference
         current_month = datetime.now(timezone.utc).strftime('%Y-%m')
+        
+        # Check what data exists before clearing
+        total_before_df = pd.read_sql_query("SELECT COUNT(*) as count FROM prediction_logs", conn)
+        total_before = total_before_df.iloc[0]['count']
+        
+        months_df = pd.read_sql_query("SELECT log_month, COUNT(*) as count FROM prediction_logs GROUP BY log_month", conn)
+        print(f"[DEBUG] Data before clearing: {total_before} total records")
+        for _, row in months_df.iterrows():
+            print(f"[DEBUG]   {row['log_month']}: {row['count']} records")
         
         # Create historical_logs table if it doesn't exist
         c.execute('''CREATE TABLE IF NOT EXISTS historical_logs (
@@ -217,67 +227,76 @@ def clear_predictions():
             archived_at TEXT
         )''')
 
-        # Read current month's data
-        current_data_df = pd.read_sql_query(
-            "SELECT * FROM prediction_logs WHERE log_month = ?", 
-            conn, 
-            params=(current_month,)
-        )
-
-        # Move current month's data to historical_logs
-        if not current_data_df.empty:
+        # OPTION 1: Clear ALL data (including July sample data)
+        # Read ALL data for archival
+        all_data_df = pd.read_sql_query("SELECT * FROM prediction_logs", conn)
+        
+        archived_count = 0
+        if not all_data_df.empty:
             archived_at = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
             
-            for _, row in current_data_df.iterrows():
-                c.execute("""
-                    INSERT INTO historical_logs 
-                    (timestamp, log_month, anomaly, explanation, network_packet_size,
-                     login_attempts, session_duration, ip_reputation_score, failed_logins,
-                     unusual_time_access, protocol_type_ICMP, protocol_type_TCP, protocol_type_UDP,
-                     encryption_used_AES, encryption_used_DES, browser_type_Chrome, browser_type_Edge,
-                     browser_type_Firefox, browser_type_Safari, browser_type_Unknown,
-                     risk_score, anomaly_score, profile_used, user_role, archived_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    row['timestamp'], row['log_month'], row['anomaly'], row['explanation'], 
-                    row['network_packet_size'], row['login_attempts'], row['session_duration'],
-                    row['ip_reputation_score'], row['failed_logins'], row['unusual_time_access'],
-                    row['protocol_type_ICMP'], row['protocol_type_TCP'], row['protocol_type_UDP'],
-                    row['encryption_used_AES'], row['encryption_used_DES'], row['browser_type_Chrome'],
-                    row['browser_type_Edge'], row['browser_type_Firefox'], row['browser_type_Safari'],
-                    row['browser_type_Unknown'], row['risk_score'], row['anomaly_score'],
-                    row['profile_used'], row['user_role'], archived_at
-                ))
+            # Move all data to historical_logs
+            for _, row in all_data_df.iterrows():
+                try:
+                    c.execute("""
+                        INSERT INTO historical_logs 
+                        (timestamp, log_month, anomaly, explanation, network_packet_size,
+                         login_attempts, session_duration, ip_reputation_score, failed_logins,
+                         unusual_time_access, protocol_type_ICMP, protocol_type_TCP, protocol_type_UDP,
+                         encryption_used_AES, encryption_used_DES, browser_type_Chrome, browser_type_Edge,
+                         browser_type_Firefox, browser_type_Safari, browser_type_Unknown,
+                         risk_score, anomaly_score, profile_used, user_role, archived_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        row['timestamp'], row['log_month'], row['anomaly'], row['explanation'], 
+                        row.get('network_packet_size', 0), row.get('login_attempts', 0), 
+                        row.get('session_duration', 0.0), row.get('ip_reputation_score', 0.0), 
+                        row.get('failed_logins', 0), row.get('unusual_time_access', 0),
+                        row.get('protocol_type_ICMP', 0), row.get('protocol_type_TCP', 1), 
+                        row.get('protocol_type_UDP', 0), row.get('encryption_used_AES', 1), 
+                        row.get('encryption_used_DES', 0), row.get('browser_type_Chrome', 1),
+                        row.get('browser_type_Edge', 0), row.get('browser_type_Firefox', 0), 
+                        row.get('browser_type_Safari', 0), row.get('browser_type_Unknown', 0),
+                        row.get('risk_score', 0.0), row.get('anomaly_score', 0.0),
+                        row.get('profile_used', 'Unknown'), row.get('user_role', 'unknown'), archived_at
+                    ))
+                    archived_count += 1
+                except Exception as e:
+                    print(f"[WARNING] Could not archive record {row.get('id', 'unknown')}: {e}")
+                    continue
 
-        # Create backup CSV
-        if not current_data_df.empty:
+            # Create backup CSV
             backup_folder = "backup"
             if not os.path.exists(backup_folder):
                 os.makedirs(backup_folder)
             
             timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-            backup_filename = f"prediction_logs_backup_{timestamp}.csv"
+            backup_filename = f"prediction_logs_backup_all_{timestamp}.csv"
             backup_path = os.path.join(backup_folder, backup_filename)
-            current_data_df.to_csv(backup_path, index=False)
-            print(f"[INFO] Current data backed up to: {backup_path}")
+            all_data_df.to_csv(backup_path, index=False)
+            print(f"[INFO] All data backed up to: {backup_path}")
 
-        # Now clear ONLY current month's data from prediction_logs
-        c.execute("DELETE FROM prediction_logs WHERE log_month = ?", (current_month,))
+        # Now clear ALL data from prediction_logs
+        c.execute("DELETE FROM prediction_logs")
+        cleared_count = c.rowcount
         
-        # Keep historical data (previous months) in prediction_logs for Static Report
+        # Get historical count
         historical_count = c.execute("SELECT COUNT(*) FROM historical_logs").fetchone()[0]
         
         conn.commit()
         conn.close()
 
         # Regenerate summary
-        from routes.dashboard import generate_summary_internal
-        generate_summary_internal()
+        try:
+            from routes.dashboard import generate_summary_internal
+            generate_summary_internal()
+        except Exception as e:
+            print(f"[WARNING] Could not regenerate summary: {e}")
 
-        flash(f"✅ Current month's logs cleared. {len(current_data_df)} records moved to historical storage. "
-              f"Total historical records: {historical_count}", "success")
+        flash(f"✅ All prediction logs cleared! {archived_count} records moved to historical storage. "
+              f"Total historical records: {historical_count}. Backup saved.", "success")
         
-        print(f"[SUCCESS] Clear completed - {len(current_data_df)} records archived")
+        print(f"[SUCCESS] Clear completed - {archived_count} records archived, {cleared_count} records cleared")
 
     except Exception as e:
         print(f"[ERROR] Clear predictions failed: {e}")
