@@ -9,57 +9,43 @@ import numpy as np
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
+
 def clean_dataframe_for_json(df):
-    """Clean DataFrame to make it JSON serializable"""
+    """Clean DataFrame to make it JSON serializable - FIXED VERSION"""
     if df is None or df.empty:
         return []
     
     df_clean = df.copy()
     
-    # Handle datetime columns and NaT values
+    # Handle datetime columns and NaT values more robustly
     for col in df_clean.columns:
         if df_clean[col].dtype == 'datetime64[ns]':
-            # Convert datetime to string, handling NaT values
-            df_clean[col] = df_clean[col].dt.strftime('%Y-%m-%d %H:%M:%S').where(
-                pd.notna(df_clean[col]), None
+            # Convert datetime to string, handling NaT values properly
+            df_clean[col] = df_clean[col].apply(
+                lambda x: x.strftime('%Y-%m-%d %H:%M:%S') if pd.notna(x) else None
+            )
+        elif df_clean[col].dtype == 'object':
+            # Handle any object columns that might contain datetime-like objects
+            df_clean[col] = df_clean[col].apply(
+                lambda x: str(x) if pd.notna(x) and x != 'NaT' else None
             )
     
-    # Replace NaN with None (which becomes null in JSON)
+    # Replace all NaN, NaT, and inf values with None (which becomes null in JSON)
+    df_clean = df_clean.replace({
+        pd.NaT: None,
+        pd.NA: None,
+        float('inf'): None,
+        float('-inf'): None
+    })
+    
+    # Replace remaining NaN with None
     df_clean = df_clean.where(pd.notna(df_clean), None)
     
     # Convert to records (list of dictionaries)
     return df_clean.to_dict(orient='records')
-
-
-
-# Replace your generate_summary_internal function in routes/dashboard.py with this:
-
-def clean_dataframe_for_json(df):
-    """Clean DataFrame to make it JSON serializable"""
-    if df is None or df.empty:
-        return []
-    
-    df_clean = df.copy()
-    
-    # Handle datetime columns and NaT values
-    for col in df_clean.columns:
-        if df_clean[col].dtype == 'datetime64[ns]':
-            # Convert datetime to string, handling NaT values
-            df_clean[col] = df_clean[col].dt.strftime('%Y-%m-%d %H:%M:%S').where(
-                pd.notna(df_clean[col]), None
-            )
-    
-    # Replace NaN with None (which becomes null in JSON)
-    df_clean = df_clean.where(pd.notna(df_clean), None)
-    
-    # Convert to records (list of dictionaries)
-    return df_clean.to_dict(orient='records')
-
-# Add this missing function to your routes/dashboard.py file
-# Place it after the clean_dataframe_for_json function
 
 def generate_summary_internal(selected_month=None):
-    """Generate internal summary data for dashboard"""
+    """Generate internal summary data for dashboard - FIXED VERSION"""
     
     # Default summary structure
     summary = {
@@ -88,13 +74,9 @@ def generate_summary_internal(selected_month=None):
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='prediction_logs'")
             if not cursor.fetchone():
                 print("[ERROR] prediction_logs table does not exist!")
-                # Try to create the table
-                from utils import create_monthly_database
-                current_month = datetime.now().strftime('%Y%m')
-                create_monthly_database(db_path, current_month)
                 return summary
             
-            # Base query - always use prediction_logs, not a non-existent table
+            # Base query - always use prediction_logs
             if selected_month:
                 query = "SELECT * FROM prediction_logs WHERE log_month = ? ORDER BY timestamp DESC"
                 params = (selected_month,)
@@ -121,15 +103,29 @@ def generate_summary_internal(selected_month=None):
                 summary['normal'] = summary['total'] - summary['anomalies']
                 summary['anomaly_rate'] = (summary['anomalies'] / summary['total'] * 100) if summary['total'] > 0 else 0
                 
-                # Handle timestamps
+                # Handle timestamps SAFELY
                 if 'timestamp' in df.columns:
+                    # Convert to datetime and handle errors gracefully
                     df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+                    
+                    # Remove any NaT values for processing
                     valid_timestamps = df['timestamp'].dropna()
+                    
                     if not valid_timestamps.empty:
-                        summary['last_updated'] = valid_timestamps.max().strftime('%Y-%m-%d %H:%M:%S')
-                        summary['timestamps'] = valid_timestamps.dt.strftime('%Y-%m-%d %H:%M:%S').tolist()
+                        max_timestamp = valid_timestamps.max()
+                        summary['last_updated'] = max_timestamp.strftime('%Y-%m-%d %H:%M:%S')
+                        
+                        # Create timestamps list for charts (only valid timestamps)
+                        summary['timestamps'] = [
+                            ts.strftime('%Y-%m-%d %H:%M:%S') 
+                            for ts in valid_timestamps 
+                            if pd.notna(ts)
+                        ]
+                    else:
+                        summary['last_updated'] = 'N/A'
+                        summary['timestamps'] = []
                 
-                # Get recent records for display
+                # Get recent records for display - CLEAN THEM PROPERLY
                 recent_df = df.head(100)
                 summary['df_tail'] = clean_dataframe_for_json(recent_df)
                 
