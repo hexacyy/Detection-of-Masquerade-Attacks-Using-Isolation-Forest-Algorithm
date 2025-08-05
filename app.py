@@ -85,8 +85,7 @@ def create_app():
     from routes.prediction import prediction_bp
     from routes.dashboard import dashboard_bp
     from routes.admin import admin_bp
-    from routes.data_feeds import data_feeds_bp
-    from routes.ml_performance import ml_performance_bp  # ADD THIS LINE
+    from routes.data_feeds import data_feeds_bp 
     from routes.user import user_bp
     
     app.register_blueprint(auth_bp)
@@ -94,7 +93,6 @@ def create_app():
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(data_feeds_bp)
-    app.register_blueprint(ml_performance_bp)  # ADD THIS LINE
     app.register_blueprint(user_bp)
     
     # Context processor for template variables
