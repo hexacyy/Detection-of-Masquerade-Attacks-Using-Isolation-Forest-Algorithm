@@ -27,6 +27,9 @@ class CorporateSessionGenerator:
         self.external_ips = self._generate_external_ips()
         self.active_sessions = {}
         
+    # Create realistic user profiles
+    # IT admins, regular staff, contractors with different access patterns
+    # Each profile has work hours, typical session duration, failure rates, etc.
     def _create_user_profiles(self):
         """Create realistic user profiles based on real corporate patterns"""
         profiles = []
@@ -78,6 +81,9 @@ class CorporateSessionGenerator:
             
         return profiles
     
+    # Create realistic threat actor patterns
+    # Insider threats, external attackers, credential stuffing
+    # Each profile has username patterns, timing, duration, failure rates, etc.
     def _create_threat_profiles(self):
         """Create realistic threat actor patterns"""
         return {
@@ -107,6 +113,7 @@ class CorporateSessionGenerator:
             }
         }
     
+    # Generate realistic corporate IP ranges
     def _generate_corporate_network(self):
         """Generate realistic corporate IP ranges"""
         return {
@@ -199,6 +206,7 @@ class CorporateSessionGenerator:
         
         return session
     
+    # Generate a realistic attack session based on threat actor patterns
     def generate_attack_session(self, attack_type='external_attacker'):
         """Generate a realistic attack session"""
         threat = self.threat_actors[attack_type]

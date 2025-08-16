@@ -112,6 +112,7 @@ def test_telegram_alert():
     result = send_simple_telegram_alert(test_message)
     return result
 
+# BASELINE DETECTION FUNCTION
 def detect_masquerade_with_baseline(session_data):
     """Actual baseline detection that gets used"""
     
@@ -238,6 +239,7 @@ def detect_masquerade_with_baseline(session_data):
         "explanation": " | ".join(anomaly_flags) if anomaly_flags else "Session within normal baseline parameters"
     }
 
+# Rule-based detection for obvious masquerade attacks
 def detect_obvious_attacks(data):
     """Rule-based detection for obvious masquerade attacks"""
     attack_indicators = []
@@ -400,7 +402,7 @@ def predict():
     baseline_result = detect_masquerade_with_simple_baseline(data)
     print(f"[DEBUG] Baseline: {baseline_result['anomaly']} ({baseline_result['confidence_level']})")
     
-    # 2. ML MODEL PREDICTION
+    # 2. ML MODEL PREDICTION (ALGORITHM: Isolation Forest)
     input_df = pd.DataFrame([data])
     input_df['risk_score'] = (
         input_df['ip_reputation_score'] * 0.5 +
@@ -931,6 +933,7 @@ def get_dashboard_metrics():
             'error': str(e)
         }), 500
 
+# This function calculates the detection rate based on recent predictions for Submit Session Page
 def calculate_detection_rate():
     """Calculate actual detection rate from recent predictions using your database structure"""
     try:
@@ -1005,7 +1008,6 @@ def calculate_detection_rate():
         traceback.print_exc()
         return "87.3%"  # Fallback on error
     
-# Add this to the END of your routes/prediction.py file (before the last line)
 
 @prediction_bp.route('/test-baseline', methods=['GET', 'POST'])
 def test_baseline():
