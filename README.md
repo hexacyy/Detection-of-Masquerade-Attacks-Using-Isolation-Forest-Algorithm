@@ -117,7 +117,7 @@ The system analyzes the following behavioral indicators:
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/yourusername/masquerade-detection.git
+   git clone https://github.com/hexacyy/Detection-of-Masquerade-Attacks-Using-Isolation-Forest-Algorithm.git
    cd masquerade-detection
    ```
 
@@ -406,42 +406,9 @@ This project addresses the challenge of detecting sophisticated masquerade attac
 - Mobile application for security monitoring
 - Automated response capabilities
 
-## 🤝 Contributing
-
-We welcome contributions! Please follow these steps:
-
-<details>
-<summary>📋 Contributing Guidelines</summary>
-
-### Development Setup
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes
-4. Add tests for new features
-5. Commit your changes (`git commit -m 'Add amazing feature'`)
-6. Push to the branch (`git push origin feature/amazing-feature`)
-7. Open a Pull Request
-
-### Code Style
-- Follow PEP 8 for Python code
-- Add docstrings for new functions
-- Update README if adding new features
-- Ensure all tests pass
-
-### Issue Templates
-- 🐛 [Bug Report](.github/ISSUE_TEMPLATE/bug_report.md)
-- ✨ [Feature Request](.github/ISSUE_TEMPLATE/feature_request.md)
-- 📖 [Documentation](.github/ISSUE_TEMPLATE/documentation.md)
-
-</details>
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
 ## 👥 Authors
 
-- **Your Name** - *Initial work* - [YourUsername](https://github.com/yourusername)
+- **Haziq Irfan Radzali** - *Initial work* - [hexacyy](https://github.com/hexacyy)
 
 ## 🙏 Acknowledgments
 
@@ -449,23 +416,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Scikit-learn community for Isolation Forest implementation
 - Flask development team
 - Academic supervisors and reviewers
-
-## 📞 Support & Links
-
-<div align="center">
-
-### 📫 Get Help
-[![Email](https://img.shields.io/badge/Email-D14836?style=for-the-badge&logo=gmail&logoColor=white)](mailto:your.email@university.edu)
-[![GitHub Issues](https://img.shields.io/badge/Issues-2b3137?style=for-the-badge&logo=github&logoColor=white)](https://github.com/yourusername/masquerade-detection/issues)
-[![Documentation](https://img.shields.io/badge/Docs-00D4AA?style=for-the-badge&logo=gitbook&logoColor=white)](https://github.com/yourusername/masquerade-detection/wiki)
-
-### 🌟 Show Support
-If this project helped you, please consider giving it a ⭐ on GitHub!
-
-[![GitHub stars](https://img.shields.io/github/stars/yourusername/masquerade-detection.svg?style=social&label=Star)](https://github.com/yourusername/masquerade-detection)
-[![GitHub forks](https://img.shields.io/github/forks/yourusername/masquerade-detection.svg?style=social&label=Fork)](https://github.com/yourusername/masquerade-detection/fork)
-
-</div>
 
 ---
 
