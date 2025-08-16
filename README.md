@@ -21,20 +21,20 @@ Masquerade attacks represent one of the most sophisticated cybersecurity threats
 <summary>📸 Click to view system screenshots</summary>
 
 <!-- Add your screenshots here -->
+![Dashboard](docs/images/dashboard.png)
 <img width="1873" height="488" alt="image" src="https://github.com/user-attachments/assets/f84dc4d0-9abb-4456-821d-5f8c50556715" />
 <img width="1871" height="522" alt="image" src="https://github.com/user-attachments/assets/f55df2ce-c79a-4d21-bd46-673e8752884b" />
 <img width="809" height="774" alt="image" src="https://github.com/user-attachments/assets/0fb39748-0c40-4675-b6fa-8d8560ae8b65" />
-![Dashboard](docs/images/dashboard.png)
 *Real-time monitoring dashboard with live threat detection*
 
+![Prediction Interface](docs/images/prediction-form.png)
 <img width="1358" height="565" alt="image" src="https://github.com/user-attachments/assets/e2b87a4c-3df8-400b-a6d1-fa1448969aa0" />
 <img width="1309" height="318" alt="image" src="https://github.com/user-attachments/assets/6cc39906-09e3-4023-9136-c035f1327f15" />
 <img width="916" height="737" alt="image" src="https://github.com/user-attachments/assets/2b950d5f-48dc-40ae-bfec-1e2b0185756c" />
-![Prediction Interface](docs/images/prediction-form.png)
 *Session analysis interface for manual threat assessment*
 
-<img width="819" height="969" alt="image" src="https://github.com/user-attachments/assets/3b51dcef-ae32-4606-a577-9ecd45215dbd" />
 ![Alert System](docs/images/telegram-alerts.png)
+<img width="819" height="969" alt="image" src="https://github.com/user-attachments/assets/3b51dcef-ae32-4606-a577-9ecd45215dbd" />
 *Instant Telegram notifications for detected threats*
 
 </details>
