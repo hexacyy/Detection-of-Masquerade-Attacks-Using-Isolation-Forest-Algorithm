@@ -425,9 +425,6 @@ This project addresses the challenge of detecting sophisticated masquerade attac
 
 Made with ❤️ for cybersecurity research
 
-[![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](https://choosealicense.com/licenses/mit/)
-[![GitHub release](https://img.shields.io/github/release/yourusername/masquerade-detection.svg)](https://github.com/yourusername/masquerade-detection/releases/)
-[![GitHub last commit](https://img.shields.io/github/last-commit/yourusername/masquerade-detection.svg)](https://github.com/yourusername/masquerade-detection/commits/main)
 
 **⚠️ Note**: This project is developed for educational and research purposes. Ensure proper security measures and testing before deploying in production environments.
 
